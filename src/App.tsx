@@ -560,10 +560,10 @@ export function App() {
   const showUploadCard = servers.length === 0 || showLoader;
 
   return (
-    <div>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Header stats={stats} importedAt={importedAt} />
 
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '24px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxWidth: 1280, margin: '0 auto', padding: '24px', width: '100%' }} className="scroll-thin">
         {showUploadCard && (
           <div style={{ marginBottom: 24 }}>
             <UploadCard onFile={handleFile} parsing={parsing} progress={progress} />
@@ -582,7 +582,7 @@ export function App() {
 
         {servers.length > 0 && !showUploadCard && (
           <div style={{ position: 'relative', border: '1px solid var(--line)' }}
-               className="corner-tl corner-tr corner-bl corner-br">
+               className="corner-tl corner-tr">
             <FilterBar
               filter={filter} setFilter={setFilter}
               count={visible.length} total={servers.length}
@@ -602,7 +602,7 @@ export function App() {
               <div></div>
             </div>
 
-            <div className="scroll-thin" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+            <div>
               {visible.map(s => (
                 <ServerRow
                   key={s.id}
@@ -619,14 +619,6 @@ export function App() {
                 </div>
               )}
             </div>
-
-            <FooterActions
-              onReplaceData={() => setShowLoader(true)}
-              onExport={exportState}
-              onImport={importState}
-              onResetManual={resetManual}
-              onResetAll={wipeAll}
-            />
           </div>
         )}
 
@@ -655,6 +647,20 @@ export function App() {
           tier cutoffs: alive &lt;30 · quiet &lt;90 · stale &lt;200 · decay &lt;500 · grave ≥500.
         </div>
       </div>
+
+      {servers.length > 0 && !showUploadCard && (
+        <div style={{ flexShrink: 0, borderTop: '1px solid var(--line)', background: 'var(--bg-0)' }} className="corner-bl corner-br">
+          <div style={{ maxWidth: 1280, margin: '0 auto' }}>
+            <FooterActions
+              onReplaceData={() => setShowLoader(true)}
+              onExport={exportState}
+              onImport={importState}
+              onResetManual={resetManual}
+              onResetAll={wipeAll}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
