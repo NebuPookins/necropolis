@@ -1,0 +1,670 @@
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import type { EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
+import { Store } from './store';
+import { parseDiscordExport } from './parser';
+import { computeDeadness, deadnessTier, fmtDate, fmtAgo } from './metrics';
+import './styles.css';
+
+// =========================================================================
+// HEADER
+// =========================================================================
+interface HeaderProps {
+  stats: { total: number; reviewed: number; keep: number; leave: number };
+  importedAt: number | null;
+}
+
+function Header({ stats, importedAt }: HeaderProps) {
+  return (
+    <div style={{ borderBottom: '1px solid var(--line)' }}>
+      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '20px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <div className="display-font" style={{ fontSize: 28, color: 'var(--amber)', letterSpacing: '0.05em' }}>
+              necropolis
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--mid)', marginTop: 4, letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+              discord server audit · personal triage console
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 18, fontSize: 11, color: 'var(--dim)' }}>
+            <Stat k="indexed" v={stats.total} />
+            <Stat k="reviewed" v={stats.reviewed} accent={stats.reviewed > 0} />
+            <Stat k="keep" v={stats.keep} color="var(--green)" />
+            <Stat k="leave" v={stats.leave} color="var(--red)" />
+            <Stat k="data" v={importedAt ? fmtDate(importedAt) : '—'} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface StatProps {
+  k: string;
+  v: number | string;
+  color?: string;
+  accent?: boolean;
+}
+
+function Stat({ k, v, color }: StatProps) {
+  return (
+    <div style={{ textAlign: 'right' }}>
+      <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>{k}</div>
+      <div style={{ fontSize: 16, color: color || 'var(--bright)', fontWeight: 600, marginTop: 2 }}>{v}</div>
+    </div>
+  );
+}
+
+// =========================================================================
+// UPLOAD
+// =========================================================================
+interface UploadCardProps {
+  onFile: (file: File) => void;
+  parsing: boolean;
+  progress: ProgressInfo | null;
+}
+
+function UploadCard({ onFile, parsing, progress }: UploadCardProps) {
+  const [drag, setDrag] = useState(false);
+  const inp = useRef<HTMLInputElement>(null);
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDrag(false);
+    const f = e.dataTransfer.files[0];
+    if (f) onFile(f);
+  };
+
+  return (
+    <div style={{ position: 'relative', padding: 32 }}
+         className={`file-drop ${drag ? 'dragging' : ''} corner-tl corner-tr corner-bl corner-br`}
+         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+         onDragLeave={() => setDrag(false)}
+         onDrop={onDrop}>
+      <div style={{ textAlign: 'center' }}>
+        <div className="display-font" style={{ fontSize: 18, color: 'var(--amber)', marginBottom: 8 }}>
+          [ load data export ]
+        </div>
+        <div style={{ color: 'var(--mid)', fontSize: 12, marginBottom: 20, lineHeight: 1.7 }}>
+          drop your discord <span style={{color:'var(--bright)'}}>package.zip</span> here, or click to browse.<br/>
+          request it at: <span style={{color:'var(--amber)'}}>settings → privacy &amp; safety → request all of my data</span><br/>
+          discord emails the link in 1–30 days. nothing leaves your browser.
+        </div>
+        {!parsing && (
+          <button className="btn-amber" onClick={() => inp.current?.click()}>
+            select package.zip
+          </button>
+        )}
+        <input ref={inp} type="file" accept=".zip" style={{ display: 'none' }}
+               onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+        {parsing && (
+          <div style={{ marginTop: 16 }}>
+            <div className="blink" style={{ color: 'var(--amber)', fontSize: 12 }}>
+              ▸ parsing — {progress?.detail || 'working'}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// SERVER ROW
+// =========================================================================
+interface ServerRowProps {
+  s: EnrichedServer;
+  expanded: boolean;
+  onExpand: () => void;
+  onUpdate: (patch: Partial<ManualEntry>) => void;
+  now: number;
+}
+
+function ServerRow({ s, expanded, onExpand, onUpdate, now }: ServerRowProps) {
+  const tier = deadnessTier(s.deadness);
+  const decision = s.manual.decision || 'undecided';
+  const refDate = s.manual.manualActivityAt
+    ? new Date(s.manual.manualActivityAt).getTime()
+    : s.myLastMsg;
+
+  return (
+    <div className="row-border" style={{ background: expanded ? 'var(--bg-1)' : 'transparent' }}>
+      <div className="grid-rows" style={{ cursor: 'pointer' }} onClick={onExpand}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <span style={{
+              fontSize: 9, padding: '1px 6px', color: tier.color,
+              border: `1px solid ${tier.bg}`, letterSpacing: '0.1em', flexShrink: 0,
+            }}>{tier.label}</span>
+            <span style={{
+              color: decision === 'leave' ? 'var(--dim)' : 'var(--bright)',
+              textDecoration: decision === 'leave' ? 'line-through' : 'none',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              fontWeight: decision === 'keep' ? 600 : 400,
+            }}>{s.name}</span>
+            {decision === 'keep' && <span style={{color:'var(--green)', fontSize:11}}>★</span>}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2, fontFamily: 'monospace' }}>
+            {s.id}
+          </div>
+        </div>
+        <div style={{ color: 'var(--mid)', fontSize: 11 }} className="col-hide">
+          <div style={{ color: 'var(--fg)' }}>{fmtDate(refDate)}</div>
+          <div style={{ fontSize: 10, color: 'var(--dim)' }}>
+            {fmtAgo(refDate, now)} ago{s.manual.manualActivityAt ? ' (manual)' : ''}
+          </div>
+        </div>
+        <div style={{ color: 'var(--fg)', fontSize: 12 }} className="col-hide">{s.myMsgCount}</div>
+        <div className="col-hide">
+          <CareIndicator value={s.manual.care ?? 3} />
+        </div>
+        <div className="col-hide">
+          <DecisionPill decision={decision} />
+        </div>
+        <div className="col-hide">
+          <div style={{ fontSize: 13, color: tier.color, fontWeight: 600 }}>
+            {Math.round(s.deadness)}
+          </div>
+          <div className="deadness-bar" style={{ marginTop: 3 }}>
+            <div style={{
+              width: `${Math.min(100, s.deadness / 8)}%`,
+              background: tier.color,
+            }} />
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ color: 'var(--dim)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+        </div>
+      </div>
+      {expanded && <ExpandedPanel s={s} onUpdate={onUpdate} />}
+    </div>
+  );
+}
+
+function CareIndicator({ value }: { value: number }) {
+  return (
+    <div style={{ display: 'flex', gap: 2 }}>
+      {[1,2,3,4,5].map(n => (
+        <div key={n} style={{
+          width: 6, height: 10,
+          background: n <= value ? 'var(--amber)' : 'var(--bg-3)',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function DecisionPill({ decision }: { decision: string }) {
+  const map: Record<string, { c: string; l: string }> = {
+    keep: { c: 'var(--green)', l: 'KEEP' },
+    leave: { c: 'var(--red)', l: 'LEAVE' },
+    undecided: { c: 'var(--dim)', l: '—' },
+  };
+  const d = map[decision] || map['undecided'];
+  return (
+    <span style={{
+      fontSize: 10, color: d.c, letterSpacing: '0.15em',
+    }}>{d.l}</span>
+  );
+}
+
+// =========================================================================
+// EXPANDED EDIT PANEL
+// =========================================================================
+interface ExpandedPanelProps {
+  s: EnrichedServer;
+  onUpdate: (patch: Partial<ManualEntry>) => void;
+}
+
+function ExpandedPanel({ s, onUpdate }: ExpandedPanelProps) {
+  const m = s.manual;
+  const careLabels = ['leaving', 'meh', 'neutral', 'value', 'essential'];
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div style={{
+      padding: '16px 24px 20px',
+      background: 'var(--bg-1)',
+      borderTop: '1px solid var(--line)',
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 24,
+    }}>
+      <div>
+        <SectionTitle>extracted from export</SectionTitle>
+        <DataRow k="my last msg" v={fmtDate(s.myLastMsg)} />
+        <DataRow k="my first msg" v={fmtDate(s.myFirstMsg)} />
+        <DataRow k="my msg count" v={s.myMsgCount} />
+        <DataRow k="channels w/ my msgs" v={s.channelCount} />
+
+        <SectionTitle style={{ marginTop: 20 }}>how much do you care?</SectionTitle>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
+          <input type="range" min="1" max="5" step="1" className="care-slider"
+                 value={m.care ?? 3}
+                 onChange={(e) => onUpdate({ care: parseInt(e.target.value) })} />
+          <span style={{ color: 'var(--amber)', minWidth: 70, fontSize: 11, textAlign: 'right' }}>
+            {careLabels[(m.care ?? 3) - 1]}
+          </span>
+        </div>
+
+        <SectionTitle style={{ marginTop: 20 }}>decision</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <button className={`btn-green ${m.decision === 'keep' ? 'btn-active' : ''}`}
+                  onClick={() => onUpdate({ decision: m.decision === 'keep' ? 'undecided' : 'keep' })}>
+            ★ keep
+          </button>
+          <button className={`btn-red ${m.decision === 'leave' ? 'btn-active' : ''}`}
+                  onClick={() => onUpdate({ decision: m.decision === 'leave' ? 'undecided' : 'leave' })}>
+            ✕ leave
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <SectionTitle>manual: when did you last check the server?</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+          <input type="date" value={m.manualActivityAt || ''}
+                 max={today}
+                 onChange={(e) => onUpdate({ manualActivityAt: e.target.value || null })}
+                 style={{ background: 'var(--bg-2)' }} />
+          <button onClick={() => onUpdate({ manualActivityAt: today })}>today</button>
+          {m.manualActivityAt && (
+            <button onClick={() => onUpdate({ manualActivityAt: null })}
+                    style={{ borderColor: 'var(--line)' }}>clear</button>
+          )}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 6, lineHeight: 1.5 }}>
+          set this to the date of the most recent message you saw in the server when you opened it.
+          overrides "my last msg" for the deadness calculation.
+        </div>
+
+        <SectionTitle style={{ marginTop: 20 }}>notes</SectionTitle>
+        <textarea value={m.notes || ''}
+                  onChange={(e) => onUpdate({ notes: e.target.value })}
+                  placeholder="why you joined, who runs it, what's left worth keeping…" />
+
+        <div style={{ marginTop: 14, fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace', lineHeight: 1.6 }}>
+          deadness: <span style={{color:'var(--bright)'}}>{Math.round(s.deadness)}</span>
+          {' = '}
+          <span title="days since last engagement">{Math.round(s.deadness * Math.log(s.myMsgCount + 2) / ((6 - (m.care ?? 3))/3))}d</span>
+          {' / '}
+          <span title="log volume dampener">log({s.myMsgCount}+2)</span>
+          {' × '}
+          <span title="care multiplier">(6−{m.care ?? 3})/3</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SectionTitleProps {
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}
+
+function SectionTitle({ children, style }: SectionTitleProps) {
+  return (
+    <div style={{
+      fontSize: 9, letterSpacing: '0.2em', color: 'var(--amber)',
+      textTransform: 'uppercase', marginBottom: 4, ...style,
+    }}>
+      ▸ {children}
+    </div>
+  );
+}
+
+function DataRow({ k, v }: { k: string; v: string | number | null }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--line)' }}>
+      <span style={{ color: 'var(--mid)', fontSize: 11 }}>{k}</span>
+      <span style={{ color: 'var(--bright)', fontSize: 12, fontFamily: 'monospace' }}>{v}</span>
+    </div>
+  );
+}
+
+// =========================================================================
+// FILTERS
+// =========================================================================
+interface FilterState {
+  search: string;
+  hideDecided: boolean;
+  onlyUnreviewed: boolean;
+}
+
+interface FilterBarProps {
+  filter: FilterState;
+  setFilter: (f: FilterState) => void;
+  count: number;
+  total: number;
+  sortKey: string;
+  setSortKey: (k: string) => void;
+}
+
+function FilterBar({ filter, setFilter, count, total, sortKey, setSortKey }: FilterBarProps) {
+  return (
+    <div style={{
+      display: 'flex', gap: 12, alignItems: 'center', padding: '14px 24px',
+      borderBottom: '1px solid var(--line)', flexWrap: 'wrap',
+    }}>
+      <input
+        type="text" placeholder="search…"
+        value={filter.search}
+        onChange={(e) => setFilter({ ...filter, search: e.target.value })}
+        style={{ flex: '1 1 200px', maxWidth: 320, background: 'var(--bg-2)' }}
+      />
+      <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}
+              style={{ background: 'var(--bg-2)' }}>
+        <option value="deadness-desc">sort: deadness ↓</option>
+        <option value="deadness-asc">sort: deadness ↑</option>
+        <option value="lastmsg-asc">sort: oldest activity</option>
+        <option value="lastmsg-desc">sort: newest activity</option>
+        <option value="msgcount-asc">sort: my msgs ↑</option>
+        <option value="msgcount-desc">sort: my msgs ↓</option>
+        <option value="name-asc">sort: name a→z</option>
+      </select>
+      <button onClick={() => setFilter({ ...filter, hideDecided: !filter.hideDecided })}
+              className={filter.hideDecided ? 'btn-active' : ''}>
+        {filter.hideDecided ? '◉' : '○'} hide decided
+      </button>
+      <button onClick={() => setFilter({ ...filter, onlyUnreviewed: !filter.onlyUnreviewed })}
+              className={filter.onlyUnreviewed ? 'btn-active' : ''}>
+        {filter.onlyUnreviewed ? '◉' : '○'} only unreviewed
+      </button>
+      <span style={{ marginLeft: 'auto', color: 'var(--dim)', fontSize: 11 }}>
+        {count} / {total}
+      </span>
+    </div>
+  );
+}
+
+// =========================================================================
+// FOOTER ACTIONS
+// =========================================================================
+interface FooterActionsProps {
+  onReplaceData: () => void;
+  onExport: () => void;
+  onImport: (file: File) => void;
+  onResetManual: () => void;
+  onResetAll: () => void;
+}
+
+function FooterActions({ onReplaceData, onExport, onImport, onResetManual, onResetAll }: FooterActionsProps) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  return (
+    <div style={{
+      padding: '16px 24px', borderTop: '1px solid var(--line)',
+      display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'space-between',
+    }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={onReplaceData}>↻ load new export</button>
+        <button onClick={onExport}>↓ export state.json</button>
+        <button onClick={() => fileRef.current?.click()}>↑ import state.json</button>
+        <input type="file" accept=".json" ref={fileRef} style={{ display: 'none' }}
+               onChange={(e) => e.target.files?.[0] && onImport(e.target.files[0])} />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onResetManual} className="btn-red">reset manual data</button>
+        <button onClick={onResetAll} className="btn-red">wipe everything</button>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// MAIN APP
+// =========================================================================
+export function App() {
+  const [servers, setServers] = useState<Server[]>([]);
+  const [manual, setManual] = useState<ManualMap>({});
+  const [importedAt, setImportedAt] = useState<number | null>(null);
+  const [issues, setIssues] = useState<string[]>([]);
+  const [hydrated, setHydrated] = useState(false);
+
+  const [parsing, setParsing] = useState(false);
+  const [progress, setProgress] = useState<ProgressInfo | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [showLoader, setShowLoader] = useState(false);
+
+  const [filter, setFilter] = useState<FilterState>({ search: '', hideDecided: false, onlyUnreviewed: false });
+  const [sortKey, setSortKey] = useState('deadness-desc');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const [s, m, im, iss] = await Promise.all([
+        Store.get<Server[]>('servers', []),
+        Store.get<ManualMap>('manual', {}),
+        Store.get<number | null>('importedAt', null),
+        Store.get<string[]>('issues', []),
+      ]);
+      setServers(s);
+      setManual(m);
+      setImportedAt(im);
+      setIssues(iss);
+      setHydrated(true);
+    })();
+  }, []);
+
+  const handleFile = async (file: File) => {
+    setParsing(true);
+    setParseError(null);
+    setProgress({ stage: 'start', detail: 'reading file' });
+    try {
+      const result = await parseDiscordExport(file, setProgress);
+      setServers(result.servers);
+      setImportedAt(result.importedAt);
+      setIssues(result.issues);
+      await Store.set('servers', result.servers);
+      await Store.set('importedAt', result.importedAt);
+      await Store.set('issues', result.issues);
+      setShowLoader(false);
+    } catch (e) {
+      console.error(e);
+      setParseError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const updateManual = useCallback(async (id: string, patch: Partial<ManualEntry>) => {
+    setManual(prev => {
+      const cur = prev[id] || { care: 3, decision: 'undecided' as const };
+      const next = { ...cur, ...patch, updatedAt: Date.now() };
+      const all = { ...prev, [id]: next };
+      Store.set('manual', all);
+      return all;
+    });
+  }, []);
+
+  const exportState = () => {
+    const payload = { servers, manual, importedAt, exportedAt: Date.now(), version: 1 };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `discord-audit-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importState = async (file: File) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as { servers?: Server[]; manual?: ManualMap; importedAt?: number };
+      if (!data.servers || !data.manual) throw new Error('bad shape');
+      setServers(data.servers);
+      setManual(data.manual);
+      setImportedAt(data.importedAt || Date.now());
+      await Store.set('servers', data.servers);
+      await Store.set('manual', data.manual);
+      await Store.set('importedAt', data.importedAt || Date.now());
+    } catch (e) {
+      alert('import failed: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const resetManual = async () => {
+    if (!confirm('Reset all manual entries? This wipes care scores, decisions, notes, and manual activity dates. Server data from the export is kept.')) return;
+    setManual({});
+    await Store.set('manual', {});
+  };
+
+  const wipeAll = async () => {
+    if (!confirm('Wipe everything? This removes all data including the parsed export. Cannot be undone.')) return;
+    setServers([]); setManual({}); setImportedAt(null); setIssues([]);
+    await Store.del('servers'); await Store.del('manual'); await Store.del('importedAt'); await Store.del('issues');
+  };
+
+  const now = Date.now();
+
+  const enriched = useMemo((): EnrichedServer[] => {
+    return servers.map(s => ({
+      ...s,
+      manual: manual[s.id] || { care: 3, decision: 'undecided' as const },
+      deadness: computeDeadness(s, manual[s.id], now),
+    }));
+  }, [servers, manual, now]);
+
+  const visible = useMemo(() => {
+    let list = enriched;
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      list = list.filter(s => s.name.toLowerCase().includes(q) || s.id.includes(q));
+    }
+    if (filter.hideDecided) {
+      list = list.filter(s => s.manual.decision === 'undecided');
+    }
+    if (filter.onlyUnreviewed) {
+      list = list.filter(s => !s.manual.updatedAt);
+    }
+
+    const sorters: Record<string, (a: EnrichedServer, b: EnrichedServer) => number> = {
+      'deadness-desc': (a,b) => b.deadness - a.deadness,
+      'deadness-asc': (a,b) => a.deadness - b.deadness,
+      'lastmsg-asc': (a,b) => (a.myLastMsg ?? 0) - (b.myLastMsg ?? 0),
+      'lastmsg-desc': (a,b) => (b.myLastMsg ?? 0) - (a.myLastMsg ?? 0),
+      'msgcount-asc': (a,b) => a.myMsgCount - b.myMsgCount,
+      'msgcount-desc': (a,b) => b.myMsgCount - a.myMsgCount,
+      'name-asc': (a,b) => a.name.localeCompare(b.name),
+    };
+    return [...list].sort(sorters[sortKey] || sorters['deadness-desc']);
+  }, [enriched, filter, sortKey]);
+
+  const stats = useMemo(() => {
+    const total = enriched.length;
+    const reviewed = enriched.filter(s => s.manual.updatedAt).length;
+    const keep = enriched.filter(s => s.manual.decision === 'keep').length;
+    const leave = enriched.filter(s => s.manual.decision === 'leave').length;
+    return { total, reviewed, keep, leave };
+  }, [enriched]);
+
+  if (!hydrated) {
+    return (
+      <div style={{ padding: 40, color: 'var(--dim)' }} className="blink">
+        ▸ initializing
+      </div>
+    );
+  }
+
+  const showUploadCard = servers.length === 0 || showLoader;
+
+  return (
+    <div>
+      <Header stats={stats} importedAt={importedAt} />
+
+      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '24px' }}>
+        {showUploadCard && (
+          <div style={{ marginBottom: 24 }}>
+            <UploadCard onFile={handleFile} parsing={parsing} progress={progress} />
+            {parseError && (
+              <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--red-dim)', color: 'var(--red)', fontSize: 12 }}>
+                ✕ parse error: {parseError}
+              </div>
+            )}
+            {servers.length > 0 && !parsing && (
+              <div style={{ marginTop: 12, textAlign: 'center' }}>
+                <button onClick={() => setShowLoader(false)}>cancel — keep existing data</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {servers.length > 0 && !showUploadCard && (
+          <div style={{ position: 'relative', border: '1px solid var(--line)' }}
+               className="corner-tl corner-tr corner-bl corner-br">
+            <FilterBar
+              filter={filter} setFilter={setFilter}
+              count={visible.length} total={servers.length}
+              sortKey={sortKey} setSortKey={setSortKey}
+            />
+
+            <div className="grid-rows" style={{
+              fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase',
+              letterSpacing: '0.15em', borderBottom: '1px solid var(--line)',
+              background: 'var(--bg-1)',
+            }}>
+              <div>server</div>
+              <div className="col-hide">last activity</div>
+              <div className="col-hide">my msgs</div>
+              <div className="col-hide">care</div>
+              <div className="col-hide">decision</div>
+              <div className="col-hide">deadness</div>
+              <div></div>
+            </div>
+
+            <div className="scroll-thin" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+              {visible.map(s => (
+                <ServerRow
+                  key={s.id}
+                  s={s}
+                  expanded={expandedId === s.id}
+                  onExpand={() => setExpandedId(expandedId === s.id ? null : s.id)}
+                  onUpdate={(patch) => updateManual(s.id, patch)}
+                  now={now}
+                />
+              ))}
+              {visible.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--dim)' }}>
+                  no servers match the current filters.
+                </div>
+              )}
+            </div>
+
+            <FooterActions
+              onReplaceData={() => setShowLoader(true)}
+              onExport={exportState}
+              onImport={importState}
+              onResetManual={resetManual}
+              onResetAll={wipeAll}
+            />
+          </div>
+        )}
+
+        {issues.length > 0 && (
+          <details style={{ marginTop: 16, padding: 12, border: '1px solid var(--line)', fontSize: 11 }}>
+            <summary style={{ color: 'var(--orange)' }}>▸ {issues.length} parsing notice(s) — click</summary>
+            <div style={{ marginTop: 8, color: 'var(--dim)', maxHeight: 200, overflowY: 'auto' }}>
+              {issues.map((iss, i) => <div key={i}>· {iss}</div>)}
+            </div>
+          </details>
+        )}
+
+        <div style={{
+          marginTop: 24, padding: 16, fontSize: 10, color: 'var(--dim)',
+          lineHeight: 1.7, borderTop: '1px solid var(--line)',
+        }}>
+          <div style={{ color: 'var(--amber)', fontSize: 9, letterSpacing: '0.2em', marginBottom: 8 }}>
+            ▸ HOW THE SCORE WORKS
+          </div>
+          <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginBottom: 8 }}>
+            deadness = days_since_engagement / log(my_msg_count + 2) × (6 − care) / 3
+          </code>
+          your last message in a server (or your manual override date if set) is the engagement timestamp.
+          higher message volume dampens the score so heavy-use servers don't dominate "alive" rankings.
+          care=3 is neutral; care=5 cuts the score by ⅔; care=1 nearly doubles it.
+          tier cutoffs: alive &lt;30 · quiet &lt;90 · stale &lt;200 · decay &lt;500 · grave ≥500.
+        </div>
+      </div>
+    </div>
+  );
+}
