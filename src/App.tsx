@@ -238,13 +238,17 @@ function ExpandedPanel({ s, onUpdate }: ExpandedPanelProps) {
         <DataRow k="channels w/ my msgs" v={s.channelCount} />
 
         <SectionTitle style={{ marginTop: 20 }}>how much do you care?</SectionTitle>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
-          <input type="range" min="1" max="5" step="1" className="care-slider"
-                 value={m.care ?? 3}
-                 onChange={(e) => onUpdate({ care: parseInt(e.target.value) })} />
-          <span style={{ color: 'var(--amber)', minWidth: 70, fontSize: 11, textAlign: 'right' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+          <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 16, lineHeight: 1 }}
+                  disabled={(m.care ?? 3) <= 1}
+                  onClick={() => onUpdate({ care: Math.max(1, (m.care ?? 3) - 1) })}>−</button>
+          <CareIndicator value={m.care ?? 3} />
+          <span style={{ color: 'var(--amber)', minWidth: 65, fontSize: 11 }}>
             {careLabels[(m.care ?? 3) - 1]}
           </span>
+          <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 16, lineHeight: 1 }}
+                  disabled={(m.care ?? 3) >= 5}
+                  onClick={() => onUpdate({ care: Math.min(5, (m.care ?? 3) + 1) })}>+</button>
         </div>
 
         <SectionTitle style={{ marginTop: 20 }}>decision</SectionTitle>
@@ -336,11 +340,9 @@ interface FilterBarProps {
   setFilter: (f: FilterState) => void;
   count: number;
   total: number;
-  sortKey: string;
-  setSortKey: (k: string) => void;
 }
 
-function FilterBar({ filter, setFilter, count, total, sortKey, setSortKey }: FilterBarProps) {
+function FilterBar({ filter, setFilter, count, total }: FilterBarProps) {
   return (
     <div style={{
       display: 'flex', gap: 12, alignItems: 'center', padding: '14px 24px',
@@ -352,16 +354,6 @@ function FilterBar({ filter, setFilter, count, total, sortKey, setSortKey }: Fil
         onChange={(e) => setFilter({ ...filter, search: e.target.value })}
         style={{ flex: '1 1 200px', maxWidth: 320, background: 'var(--bg-2)' }}
       />
-      <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}
-              style={{ background: 'var(--bg-2)' }}>
-        <option value="deadness-desc">sort: deadness ↓</option>
-        <option value="deadness-asc">sort: deadness ↑</option>
-        <option value="lastmsg-asc">sort: oldest activity</option>
-        <option value="lastmsg-desc">sort: newest activity</option>
-        <option value="msgcount-asc">sort: my msgs ↑</option>
-        <option value="msgcount-desc">sort: my msgs ↓</option>
-        <option value="name-asc">sort: name a→z</option>
-      </select>
       <button onClick={() => setFilter({ ...filter, hideDecided: !filter.hideDecided })}
               className={filter.hideDecided ? 'btn-active' : ''}>
         {filter.hideDecided ? '◉' : '○'} hide decided
@@ -426,7 +418,6 @@ export function App() {
   const [showLoader, setShowLoader] = useState(false);
 
   const [filter, setFilter] = useState<FilterState>({ search: '', hideDecided: false, onlyUnreviewed: false });
-  const [sortKey, setSortKey] = useState('deadness-desc');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -538,17 +529,17 @@ export function App() {
       list = list.filter(s => !s.manual.updatedAt);
     }
 
-    const sorters: Record<string, (a: EnrichedServer, b: EnrichedServer) => number> = {
-      'deadness-desc': (a,b) => b.deadness - a.deadness,
-      'deadness-asc': (a,b) => a.deadness - b.deadness,
-      'lastmsg-asc': (a,b) => (a.myLastMsg ?? 0) - (b.myLastMsg ?? 0),
-      'lastmsg-desc': (a,b) => (b.myLastMsg ?? 0) - (a.myLastMsg ?? 0),
-      'msgcount-asc': (a,b) => a.myMsgCount - b.myMsgCount,
-      'msgcount-desc': (a,b) => b.myMsgCount - a.myMsgCount,
-      'name-asc': (a,b) => a.name.localeCompare(b.name),
+    const sorter = (a: EnrichedServer, b: EnrichedServer) => {
+      const aLeave = a.manual.decision === 'leave';
+      const bLeave = b.manual.decision === 'leave';
+      if (aLeave !== bLeave) return aLeave ? 1 : -1;
+      const careA = a.manual.care ?? 3;
+      const careB = b.manual.care ?? 3;
+      if (careA !== careB) return careA - careB;
+      return b.deadness - a.deadness;
     };
-    return [...list].sort(sorters[sortKey] || sorters['deadness-desc']);
-  }, [enriched, filter, sortKey]);
+    return [...list].sort(sorter);
+  }, [enriched, filter]);
 
   const stats = useMemo(() => {
     const total = enriched.length;
@@ -595,7 +586,6 @@ export function App() {
             <FilterBar
               filter={filter} setFilter={setFilter}
               count={visible.length} total={servers.length}
-              sortKey={sortKey} setSortKey={setSortKey}
             />
 
             <div className="grid-rows" style={{

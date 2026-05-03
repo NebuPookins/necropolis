@@ -107,30 +107,6 @@ details > summary::-webkit-details-marker { display: none; }
   height: 100%;
   transition: width 0.3s;
 }
-.care-slider {
-  appearance: none;
-  width: 100%;
-  height: 4px;
-  background: var(--bg-3);
-  border: none;
-  outline: none;
-  padding: 0;
-}
-.care-slider::-webkit-slider-thumb {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  background: var(--amber);
-  cursor: pointer;
-  border: 2px solid #000;
-}
-.care-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  background: var(--amber);
-  cursor: pointer;
-  border: 2px solid #000;
-}
 .grid-rows { display: grid; grid-template-columns: 1fr 140px 80px 90px 90px 110px 110px; align-items: center; gap: 12px; padding: 10px 16px; }
 @media (max-width: 900px) {
   .grid-rows { grid-template-columns: 1fr 110px 70px; }
