@@ -187,8 +187,9 @@ export async function parseDiscordExport(
           } catch { issues.push(`Bad messages.csv in DM channel ${ck}`); }
         }
 
+        channelMsgs.sort((a, b) => b.ts - a.ts);
         const recentChannelMsgs = channelMsgs.length > 0
-          ? channelMsgs.slice(-MAX_RECENT) : undefined;
+          ? channelMsgs.slice(0, MAX_RECENT) : undefined;
 
         // Sync per-user data into userMap
         for (const [rid, d] of perUser) {
