@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
+import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
-import { computeDeadness, deadnessTier, fmtDate, fmtAgo } from './metrics';
+import { computeDeadness, computeUserDeadness, deadnessTier, fmtDate, fmtAgo } from './metrics';
 import './styles.css';
 
 // =========================================================================
@@ -317,11 +317,244 @@ function SectionTitle({ children, style }: SectionTitleProps) {
   );
 }
 
-function DataRow({ k, v }: { k: string; v: string | number | null }) {
+function DataRow({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--line)' }}>
       <span style={{ color: 'var(--mid)', fontSize: 11 }}>{k}</span>
-      <span style={{ color: 'var(--bright)', fontSize: 12, fontFamily: 'monospace' }}>{v}</span>
+      {typeof v === 'string' || typeof v === 'number' ? (
+        <span style={{ color: 'var(--bright)', fontSize: 12, fontFamily: 'monospace' }}>{v}</span>
+      ) : v}
+    </div>
+  );
+}
+
+// =========================================================================
+// TAB BAR
+// =========================================================================
+interface TabBarProps {
+  tab: 'servers' | 'users';
+  onTab: (t: 'servers' | 'users') => void;
+  serverCount: number;
+  userCount: number;
+}
+
+function TabBar({ tab, onTab, serverCount, userCount }: TabBarProps) {
+  return (
+    <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)' }}>
+      <TabButton active={tab === 'servers'} onClick={() => onTab('servers')}>
+        ⌨ servers ({serverCount})
+      </TabButton>
+      <TabButton active={tab === 'users'} onClick={() => onTab('users')}>
+        👤 users ({userCount})
+      </TabButton>
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: '10px 20px', fontSize: 11, letterSpacing: '0.1em',
+      border: 'none', borderBottom: active ? '2px solid var(--amber)' : '2px solid transparent',
+      color: active ? 'var(--amber)' : 'var(--dim)',
+      background: active ? 'var(--bg-1)' : 'transparent',
+      fontWeight: active ? 600 : 400,
+      borderRadius: 0,
+    }}>{children}</button>
+  );
+}
+
+// =========================================================================
+// USER ROW
+// =========================================================================
+interface UserRowProps {
+  u: EnrichedDiscordUser;
+  expanded: boolean;
+  onExpand: () => void;
+  onUpdate: (patch: Partial<ManualEntry>) => void;
+  now: number;
+}
+
+function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
+  const tier = deadnessTier(u.deadness);
+  const decision = u.manual.decision || 'undecided';
+  const refDate = u.manual.manualActivityAt
+    ? new Date(u.manual.manualActivityAt).getTime()
+    : u.myLastMsg;
+
+  return (
+    <div className="row-border" style={{ background: expanded ? 'var(--bg-1)' : 'transparent' }}>
+      <div className="grid-rows" style={{ cursor: 'pointer' }} onClick={onExpand}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <span style={{
+              fontSize: 9, padding: '1px 6px', color: tier.color,
+              border: `1px solid ${tier.bg}`, letterSpacing: '0.1em', flexShrink: 0,
+            }}>{tier.label}</span>
+            <span style={{
+              color: decision === 'leave' ? 'var(--dim)' : 'var(--bright)',
+              textDecoration: decision === 'leave' ? 'line-through' : 'none',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              fontWeight: decision === 'keep' ? 600 : 400,
+            }}>{u.name}</span>
+            {decision === 'keep' && <span style={{color:'var(--green)', fontSize:11}}>★</span>}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2, fontFamily: 'monospace' }}>
+            {u.id.slice(0, 10)}
+          </div>
+        </div>
+        <div style={{ color: 'var(--mid)', fontSize: 11 }} className="col-hide">
+          <div style={{ color: 'var(--fg)' }}>{fmtDate(refDate)}</div>
+          <div style={{ fontSize: 10, color: 'var(--dim)' }}>
+            {fmtAgo(refDate, now)} ago
+          </div>
+        </div>
+        <div style={{ color: 'var(--fg)', fontSize: 12 }} className="col-hide">{u.myMsgCount}</div>
+        <div className="col-hide">
+          <CareIndicator value={u.manual.care ?? 3} />
+        </div>
+        <div className="col-hide">
+          <DecisionPill decision={decision} />
+        </div>
+        <div className="col-hide">
+          <div style={{ fontSize: 13, color: tier.color, fontWeight: 600 }}>
+            {Math.round(u.deadness)}
+          </div>
+          <div className="deadness-bar" style={{ marginTop: 3 }}>
+            <div style={{
+              width: `${Math.min(100, u.deadness / 8)}%`,
+              background: tier.color,
+            }} />
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ color: 'var(--dim)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+        </div>
+      </div>
+      {expanded && <UserExpandedPanel u={u} onUpdate={onUpdate} now={now} />}
+    </div>
+  );
+}
+
+// =========================================================================
+// USER EXPANDED EDIT PANEL
+// =========================================================================
+interface UserExpandedPanelProps {
+  u: EnrichedDiscordUser;
+  onUpdate: (patch: Partial<ManualEntry>) => void;
+  now: number;
+}
+
+function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
+  const m = u.manual;
+  const careLabels = ['leaving', 'meh', 'neutral', 'value', 'essential'];
+  const today = new Date().toISOString().slice(0, 10);
+  const myFmt = (ms: number | null) => ms ? fmtDate(ms) : '—';
+  const msgLink = u.lastChannelId && u.lastMsgId
+    ? `https://discordapp.com/channels/@me/${u.lastChannelId}/${u.lastMsgId}`
+    : null;
+
+  return (
+    <div style={{
+      padding: '16px 24px 20px',
+      background: 'var(--bg-1)',
+      borderTop: '1px solid var(--line)',
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 24,
+    }}>
+      <div>
+        <SectionTitle>extracted from export</SectionTitle>
+        <DataRow k="last msg" v={myFmt(u.myLastMsg)} />
+        <DataRow k="msg count" v={u.myMsgCount} />
+        {msgLink && (
+          <div style={{ marginTop: 8 }}>
+            <a href={msgLink} target="_blank" rel="noopener noreferrer"
+               style={{ color: 'var(--amber)', fontSize: 11, textDecoration: 'underline' }}>
+              ▸ open last message in discord
+            </a>
+          </div>
+        )}
+
+        {u.recentMsgs && u.recentMsgs.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 9, letterSpacing: '0.2em', color: 'var(--mid)', textTransform: 'uppercase', marginBottom: 4 }}>
+              ▸ last {u.recentMsgs.length} messages
+            </div>
+            {[...u.recentMsgs].reverse().map((m, i) => (
+              <div key={i} style={{
+                padding: '6px 8px', marginBottom: 4,
+                background: 'var(--bg-2)', borderRadius: 2,
+                fontSize: 11, lineHeight: 1.4,
+                borderLeft: '2px solid var(--line-2)',
+              }}>
+                <div style={{ color: 'var(--dim)', fontSize: 9, marginBottom: 2 }}>
+                  {fmtDate(m.ts)} ({fmtAgo(m.ts, now)} ago)
+                </div>
+                <div style={{ color: 'var(--fg)', wordBreak: 'break-word' }}>
+                  {m.content || <span style={{color:'var(--dim)', fontStyle:'italic'}}>(attachment or empty)</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <SectionTitle style={{ marginTop: 20 }}>how much do you care?</SectionTitle>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+          <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 16, lineHeight: 1 }}
+                  disabled={(m.care ?? 3) <= 1}
+                  onClick={() => onUpdate({ care: Math.max(1, (m.care ?? 3) - 1) })}>−</button>
+          <CareIndicator value={m.care ?? 3} />
+          <span style={{ color: 'var(--amber)', minWidth: 65, fontSize: 11 }}>
+            {careLabels[(m.care ?? 3) - 1]}
+          </span>
+          <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 16, lineHeight: 1 }}
+                  disabled={(m.care ?? 3) >= 5}
+                  onClick={() => onUpdate({ care: Math.min(5, (m.care ?? 3) + 1) })}>+</button>
+        </div>
+
+        <SectionTitle style={{ marginTop: 20 }}>decision</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <button className={`btn-green ${m.decision === 'keep' ? 'btn-active' : ''}`}
+                  onClick={() => onUpdate({ decision: m.decision === 'keep' ? 'undecided' : 'keep' })}>
+            ★ keep
+          </button>
+          <button className={`btn-red ${m.decision === 'leave' ? 'btn-active' : ''}`}
+                  onClick={() => onUpdate({ decision: m.decision === 'leave' ? 'undecided' : 'leave' })}>
+            ✕ leave
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <SectionTitle>manual: when did you last check in?</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+          <input type="date" value={m.manualActivityAt || ''}
+                 max={today}
+                 onChange={(e) => onUpdate({ manualActivityAt: e.target.value || null })}
+                 style={{ background: 'var(--bg-2)' }} />
+          <button onClick={() => onUpdate({ manualActivityAt: today })}>today</button>
+          {m.manualActivityAt && (
+            <button onClick={() => onUpdate({ manualActivityAt: null })}
+                    style={{ borderColor: 'var(--line)' }}>clear</button>
+          )}
+        </div>
+
+        <SectionTitle style={{ marginTop: 20 }}>notes</SectionTitle>
+        <textarea value={m.notes || ''}
+                  onChange={(e) => onUpdate({ notes: e.target.value })}
+                  placeholder="who they are, why you fell out of touch…" />
+
+        <div style={{ marginTop: 14, fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace', lineHeight: 1.6 }}>
+          deadness: <span style={{color:'var(--bright)'}}>{Math.round(u.deadness)}</span>
+          {' = '}
+          <span title="days since last message">{u.myLastMsg ? Math.round((now - u.myLastMsg) / 86400000) : '∞'}d</span>
+          {' / '}
+          <span title="log volume dampener">log({u.myMsgCount}+2)</span>
+          {' × '}
+          <span title="care multiplier">(6−{m.care ?? 3})/3</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -407,10 +640,13 @@ function FooterActions({ onReplaceData, onExport, onImport, onResetManual, onRes
 // =========================================================================
 export function App() {
   const [servers, setServers] = useState<Server[]>([]);
+  const [users, setUsers] = useState<DiscordUser[]>([]);
   const [manual, setManual] = useState<ManualMap>({});
+  const [userManual, setUserManual] = useState<ManualMap>({});
   const [importedAt, setImportedAt] = useState<number | null>(null);
   const [issues, setIssues] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [tab, setTab] = useState<'servers' | 'users'>('servers');
 
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
@@ -422,14 +658,18 @@ export function App() {
 
   useEffect(() => {
     (async () => {
-      const [s, m, im, iss] = await Promise.all([
+      const [s, u, m, um, im, iss] = await Promise.all([
         Store.get<Server[]>('servers', []),
+        Store.get<DiscordUser[]>('users', []),
         Store.get<ManualMap>('manual', {}),
+        Store.get<ManualMap>('userManual', {}),
         Store.get<number | null>('importedAt', null),
         Store.get<string[]>('issues', []),
       ]);
       setServers(s);
+      setUsers(u);
       setManual(m);
+      setUserManual(um);
       setImportedAt(im);
       setIssues(iss);
       setHydrated(true);
@@ -443,9 +683,11 @@ export function App() {
     try {
       const result = await parseDiscordExport(file, setProgress);
       setServers(result.servers);
+      setUsers(result.users);
       setImportedAt(result.importedAt);
       setIssues(result.issues);
       await Store.set('servers', result.servers);
+      await Store.set('users', result.users);
       await Store.set('importedAt', result.importedAt);
       await Store.set('issues', result.issues);
       setShowLoader(false);
@@ -467,8 +709,18 @@ export function App() {
     });
   }, []);
 
+  const updateUserManual = useCallback(async (id: string, patch: Partial<ManualEntry>) => {
+    setUserManual(prev => {
+      const cur = prev[id] || { care: 3, decision: 'undecided' as const };
+      const next = { ...cur, ...patch, updatedAt: Date.now() };
+      const all = { ...prev, [id]: next };
+      Store.set('userManual', all);
+      return all;
+    });
+  }, []);
+
   const exportState = () => {
-    const payload = { servers, manual, importedAt, exportedAt: Date.now(), version: 1 };
+    const payload = { servers, users, manual, userManual, importedAt, exportedAt: Date.now(), version: 2 };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -481,13 +733,17 @@ export function App() {
   const importState = async (file: File) => {
     try {
       const text = await file.text();
-      const data = JSON.parse(text) as { servers?: Server[]; manual?: ManualMap; importedAt?: number };
+      const data = JSON.parse(text) as { servers?: Server[]; users?: DiscordUser[]; manual?: ManualMap; userManual?: ManualMap; importedAt?: number };
       if (!data.servers || !data.manual) throw new Error('bad shape');
       setServers(data.servers);
+      setUsers(data.users ?? []);
       setManual(data.manual);
+      setUserManual(data.userManual ?? {});
       setImportedAt(data.importedAt || Date.now());
       await Store.set('servers', data.servers);
+      await Store.set('users', data.users ?? []);
       await Store.set('manual', data.manual);
+      await Store.set('userManual', data.userManual ?? {});
       await Store.set('importedAt', data.importedAt || Date.now());
     } catch (e) {
       alert('import failed: ' + (e instanceof Error ? e.message : String(e)));
@@ -495,15 +751,17 @@ export function App() {
   };
 
   const resetManual = async () => {
-    if (!confirm('Reset all manual entries? This wipes care scores, decisions, notes, and manual activity dates. Server data from the export is kept.')) return;
+    if (!confirm('Reset all manual entries? This wipes care scores, decisions, notes, and manual activity dates. Server and user data from the export is kept.')) return;
     setManual({});
+    setUserManual({});
     await Store.set('manual', {});
+    await Store.set('userManual', {});
   };
 
   const wipeAll = async () => {
     if (!confirm('Wipe everything? This removes all data including the parsed export. Cannot be undone.')) return;
-    setServers([]); setManual({}); setImportedAt(null); setIssues([]);
-    await Store.del('servers'); await Store.del('manual'); await Store.del('importedAt'); await Store.del('issues');
+    setServers([]); setUsers([]); setManual({}); setUserManual({}); setImportedAt(null); setIssues([]);
+    await Store.del('servers'); await Store.del('users'); await Store.del('manual'); await Store.del('userManual'); await Store.del('importedAt'); await Store.del('issues');
   };
 
   const now = Date.now();
@@ -515,6 +773,14 @@ export function App() {
       deadness: computeDeadness(s, manual[s.id], now),
     }));
   }, [servers, manual, now]);
+
+  const enrichedUsers = useMemo((): EnrichedDiscordUser[] => {
+    return users.map(u => ({
+      ...u,
+      manual: userManual[u.id] || { care: 3, decision: 'undecided' as const },
+      deadness: computeUserDeadness(u, userManual[u.id], now),
+    }));
+  }, [users, userManual, now]);
 
   const visible = useMemo(() => {
     let list = enriched;
@@ -541,6 +807,31 @@ export function App() {
     return [...list].sort(sorter);
   }, [enriched, filter]);
 
+  const visibleUsers = useMemo(() => {
+    let list = enrichedUsers;
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      list = list.filter(u => u.name.toLowerCase().includes(q) || u.id.includes(q));
+    }
+    if (filter.hideDecided) {
+      list = list.filter(u => u.manual.decision === 'undecided');
+    }
+    if (filter.onlyUnreviewed) {
+      list = list.filter(u => !u.manual.updatedAt);
+    }
+
+    const sorter = (a: EnrichedDiscordUser, b: EnrichedDiscordUser) => {
+      const aLeave = a.manual.decision === 'leave';
+      const bLeave = b.manual.decision === 'leave';
+      if (aLeave !== bLeave) return aLeave ? 1 : -1;
+      const careA = a.manual.care ?? 3;
+      const careB = b.manual.care ?? 3;
+      if (careA !== careB) return careA - careB;
+      return b.deadness - a.deadness;
+    };
+    return [...list].sort(sorter);
+  }, [enrichedUsers, filter]);
+
   const stats = useMemo(() => {
     const total = enriched.length;
     const reviewed = enriched.filter(s => s.manual.updatedAt).length;
@@ -548,6 +839,14 @@ export function App() {
     const leave = enriched.filter(s => s.manual.decision === 'leave').length;
     return { total, reviewed, keep, leave };
   }, [enriched]);
+
+  const userStats = useMemo(() => {
+    const total = enrichedUsers.length;
+    const reviewed = enrichedUsers.filter(u => u.manual.updatedAt).length;
+    const keep = enrichedUsers.filter(u => u.manual.decision === 'keep').length;
+    const leave = enrichedUsers.filter(u => u.manual.decision === 'leave').length;
+    return { total, reviewed, keep, leave };
+  }, [enrichedUsers]);
 
   if (!hydrated) {
     return (
@@ -561,7 +860,7 @@ export function App() {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <Header stats={stats} importedAt={importedAt} />
+      <Header stats={tab === 'servers' ? stats : userStats} importedAt={importedAt} />
 
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxWidth: 1280, margin: '0 auto', padding: '24px', width: '100%' }} className="scroll-thin">
         {showUploadCard && (
@@ -583,42 +882,83 @@ export function App() {
         {servers.length > 0 && !showUploadCard && (
           <div style={{ position: 'relative', border: '1px solid var(--line)' }}
                className="corner-tl corner-tr">
+            <TabBar tab={tab} onTab={setTab} serverCount={servers.length} userCount={users.length} />
+
             <FilterBar
               filter={filter} setFilter={setFilter}
-              count={visible.length} total={servers.length}
+              count={tab === 'servers' ? visible.length : visibleUsers.length}
+              total={tab === 'servers' ? servers.length : users.length}
             />
 
-            <div className="grid-rows" style={{
-              fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase',
-              letterSpacing: '0.15em', borderBottom: '1px solid var(--line)',
-              background: 'var(--bg-1)',
-            }}>
-              <div>server</div>
-              <div className="col-hide">last activity</div>
-              <div className="col-hide">my msgs</div>
-              <div className="col-hide">care</div>
-              <div className="col-hide">decision</div>
-              <div className="col-hide">deadness</div>
-              <div></div>
-            </div>
-
-            <div>
-              {visible.map(s => (
-                <ServerRow
-                  key={s.id}
-                  s={s}
-                  expanded={expandedId === s.id}
-                  onExpand={() => setExpandedId(expandedId === s.id ? null : s.id)}
-                  onUpdate={(patch) => updateManual(s.id, patch)}
-                  now={now}
-                />
-              ))}
-              {visible.length === 0 && (
-                <div style={{ padding: 40, textAlign: 'center', color: 'var(--dim)' }}>
-                  no servers match the current filters.
+            {tab === 'servers' && (
+              <>
+                <div className="grid-rows" style={{
+                  fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase',
+                  letterSpacing: '0.15em', borderBottom: '1px solid var(--line)',
+                  background: 'var(--bg-1)',
+                }}>
+                  <div>server</div>
+                  <div className="col-hide">last activity</div>
+                  <div className="col-hide">my msgs</div>
+                  <div className="col-hide">care</div>
+                  <div className="col-hide">decision</div>
+                  <div className="col-hide">deadness</div>
+                  <div></div>
                 </div>
-              )}
-            </div>
+                <div>
+                  {visible.map(s => (
+                    <ServerRow
+                      key={s.id}
+                      s={s}
+                      expanded={expandedId === s.id}
+                      onExpand={() => setExpandedId(expandedId === s.id ? null : s.id)}
+                      onUpdate={(patch) => updateManual(s.id, patch)}
+                      now={now}
+                    />
+                  ))}
+                  {visible.length === 0 && (
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--dim)' }}>
+                      no servers match the current filters.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {tab === 'users' && (
+              <>
+                <div className="grid-rows" style={{
+                  fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase',
+                  letterSpacing: '0.15em', borderBottom: '1px solid var(--line)',
+                  background: 'var(--bg-1)',
+                }}>
+                  <div>user</div>
+                  <div className="col-hide">last activity</div>
+                  <div className="col-hide">your msgs</div>
+                  <div className="col-hide">care</div>
+                  <div className="col-hide">decision</div>
+                  <div className="col-hide">deadness</div>
+                  <div></div>
+                </div>
+                <div>
+                  {visibleUsers.map(u => (
+                    <UserRow
+                      key={u.id}
+                      u={u}
+                      expanded={expandedId === u.id}
+                      onExpand={() => setExpandedId(expandedId === u.id ? null : u.id)}
+                      onUpdate={(patch) => updateUserManual(u.id, patch)}
+                      now={now}
+                    />
+                  ))}
+                  {visibleUsers.length === 0 && (
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--dim)' }}>
+                      no users match the current filters.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -638,9 +978,19 @@ export function App() {
           <div style={{ color: 'var(--amber)', fontSize: 9, letterSpacing: '0.2em', marginBottom: 8 }}>
             ▸ HOW THE SCORE WORKS
           </div>
-          <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginBottom: 8 }}>
-            deadness = days_since_engagement / log(my_msg_count + 2) × (6 − care) / 3
-          </code>
+          <div style={{ marginBottom: 12 }}>
+            <strong style={{ color: 'var(--mid)' }}>servers</strong>
+            <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginTop: 2 }}>
+              deadness = days_since_engagement / log(my_msg_count + 2) × (6 − care) / 3
+            </code>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <strong style={{ color: 'var(--mid)' }}>users</strong>
+            <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginTop: 2 }}>
+              deadness = days_since_last_msg / log(your_msg_count + 2) × (6 − care) / 3
+            </code>
+            same formula as servers, but using your last message timestamp from the DM conversation.
+          </div>
           your last message in a server (or your manual override date if set) is the engagement timestamp.
           higher message volume dampens the score so heavy-use servers don't dominate "alive" rankings.
           care=3 is neutral; care=5 cuts the score by ⅔; care=1 nearly doubles it.

@@ -1,4 +1,4 @@
-import type { Server, ManualEntry, DeadnessTier } from './types';
+import type { DiscordUser, ManualEntry, DeadnessTier, Server } from './types';
 
 export function computeDeadness(server: Server, manual: ManualEntry | undefined, now: number): number {
   const m = manual || {};
@@ -18,6 +18,29 @@ export function computeDeadness(server: Server, manual: ManualEntry | undefined,
   }
 
   const volumeDampener = Math.log(server.myMsgCount + 2);
+  const care = m.care ?? 3;
+  const careMultiplier = (6 - care) / 3;
+
+  return (days / volumeDampener) * careMultiplier;
+}
+
+export function computeUserDeadness(
+  user: { myLastMsg: number | null; myMsgCount: number },
+  manual: ManualEntry | undefined,
+  now: number,
+): number {
+  const m = manual || {};
+
+  let refMs: number | null = null;
+  if (m.manualActivityAt) {
+    const t = new Date(m.manualActivityAt).getTime();
+    if (!isNaN(t)) refMs = t;
+  }
+  if (refMs === null) refMs = user.myLastMsg;
+
+  const days = refMs === null ? 365 * 5 : Math.max(0, (now - refMs) / 86400000);
+
+  const volumeDampener = Math.log(user.myMsgCount + 2);
   const care = m.care ?? 3;
   const careMultiplier = (6 - care) / 3;
 

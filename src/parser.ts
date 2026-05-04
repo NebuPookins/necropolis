@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import type { Server, ParseResult, ProgressInfo } from './types';
+import type { DiscordUser, Server, ParseResult, ProgressInfo } from './types';
 
 function parseCsvRow(line: string): string[] {
   const out: string[] = [];
@@ -45,10 +45,9 @@ export async function parseDiscordExport(
   // Detect actual directory casing from the zip
   const messagesDir = detectDir(zip, 'messages');
   const serversDir = detectDir(zip, 'servers');
-  console.log(`[necropolis] detected dirs: messages="${messagesDir}", servers="${serversDir}"`);
 
   if (!messagesDir) {
-    return { servers: [], issues: ['No Messages/ directory found in the zip'], importedAt: Date.now() };
+    return { servers: [], users: [], issues: ['No Messages/ directory found in the zip'], importedAt: Date.now() };
   }
 
   const msgPrefix = `${messagesDir}/`;
@@ -83,6 +82,8 @@ export async function parseDiscordExport(
     }
   }
 
+  const userMap = new Map<string, DiscordUser>();
+
   let channelsWithGuild = 0;
   let channelsSkippedNoGuild = 0;
   let i = 0;
@@ -97,7 +98,13 @@ export async function parseDiscordExport(
     const chanFile = zip.file(`${msgPrefix}${ck}/channel.json`);
     if (!chanFile) continue;
 
-    let chan: { guild?: { id: string; name?: string } };
+    let chan: {
+      id?: unknown;
+      guild?: { id: string; name?: string } | null;
+      type?: unknown;
+      name?: string;
+      recipients?: unknown;
+    };
     try {
       chan = JSON.parse(await chanFile.async('text')) as typeof chan;
     } catch {
@@ -105,7 +112,106 @@ export async function parseDiscordExport(
       continue;
     }
 
-    if (!chan.guild) { channelsSkippedNoGuild++; continue; }
+    if (!chan.guild) {
+      const isDm = chan.type === 'DM' || chan.type === 'GROUP_DM';
+      const raw = chan.recipients ?? [];
+      const hasRecipients = Array.isArray(raw) && raw.length > 0;
+
+      if (isDm && hasRecipients) {
+        const recipients: { id: string; name: string }[] = raw.map((r: unknown) => {
+          if (typeof r === 'string') {
+            const isId = /^\d+$/.test(r);
+            return { id: r, name: isId ? `User ${r.slice(-4)}` : r };
+          }
+          const o = r as Record<string, unknown>;
+          return { id: String(o.id ?? o.ID ?? ''), name: String(o.global_name ?? o.username ?? o.id ?? '').slice(0, 60) };
+        }).filter(r => r.id);
+
+        const chanId = String(chan.id ?? '').replace(/^c/, '');
+
+        const msgsJson = zip.file(`${msgPrefix}${ck}/messages.json`);
+        const msgsCsv = zip.file(`${msgPrefix}${ck}/messages.csv`);
+
+        // Collect per-user message data (this export only has the user's own messages)
+        const perUser: Map<string, { tsMax: number; count: number; lastId: string; lastContent: string }> = new Map();
+        for (const r of recipients) perUser.set(r.id, { tsMax: 0, count: 0, lastId: '', lastContent: '' });
+
+        // Also collect recent messages from this channel (shared across recipients)
+        const MAX_RECENT = 5;
+        const channelMsgs: Array<{ ts: number; content: string }> = [];
+
+        if (msgsJson) {
+          try {
+            const arr = JSON.parse(await msgsJson.async('text')) as Record<string, unknown>[];
+            if (Array.isArray(arr)) for (const msg of arr) {
+              const tsRaw = msg['Timestamp'] ?? msg['timestamp'] ?? msg['created_at'];
+              if (!tsRaw) continue;
+              const t = new Date(String(tsRaw)).getTime();
+              if (isNaN(t)) continue;
+              const msgId = String(msg['ID'] ?? msg['id'] ?? '');
+              const content = String(msg['Contents'] ?? msg['Content'] ?? msg['content'] ?? '');
+              channelMsgs.push({ ts: t, content });
+              for (const r of recipients) {
+                const d = perUser.get(r.id)!;
+                d.count++;
+                if (t > d.tsMax) { d.tsMax = t; d.lastId = msgId; d.lastContent = content; }
+              }
+            }
+          } catch { issues.push(`Bad messages.json in DM channel ${ck}`); }
+        } else if (msgsCsv) {
+          try {
+            const text = await msgsCsv.async('text');
+            const lines = text.split(/\r?\n/);
+            const header = lines[0] ? parseCsvRow(lines[0]) : [];
+            const tsIdx = header.findIndex(h => /timestamp/i.test(h));
+            const idIdx = header.findIndex(h => /^id$/i.test(h));
+            const contentIdx = header.findIndex(h => /contents|content|message/i.test(h));
+            if (tsIdx >= 0) {
+              for (let j = 1; j < lines.length; j++) {
+                if (!lines[j].trim()) continue;
+                const cols = parseCsvRow(lines[j]);
+                const tsRaw = cols[tsIdx];
+                if (!tsRaw) continue;
+                const t = new Date(tsRaw).getTime();
+                if (isNaN(t)) continue;
+                const msgId = idIdx >= 0 ? (cols[idIdx] || '') : '';
+                const content = contentIdx >= 0 ? (cols[contentIdx] || '') : '';
+                channelMsgs.push({ ts: t, content });
+                for (const r of recipients) {
+                  const d = perUser.get(r.id)!;
+                  d.count++;
+                  if (t > d.tsMax) { d.tsMax = t; d.lastId = msgId; d.lastContent = content; }
+                }
+              }
+            }
+          } catch { issues.push(`Bad messages.csv in DM channel ${ck}`); }
+        }
+
+        const recentChannelMsgs = channelMsgs.length > 0
+          ? channelMsgs.slice(-MAX_RECENT) : undefined;
+
+        // Sync per-user data into userMap
+        for (const [rid, d] of perUser) {
+          if (d.count === 0) continue;
+          let u = userMap.get(rid);
+          if (!u) {
+            u = { id: rid, name: recipients.find(r => r.id === rid)?.name ?? rid, myLastMsg: null, myMsgCount: 0, lastMsgId: null, lastChannelId: null, lastMsgContent: null };
+            userMap.set(rid, u);
+          }
+          u.myMsgCount += d.count;
+          if (d.tsMax > (u.myLastMsg ?? 0)) {
+            u.myLastMsg = d.tsMax;
+            u.lastMsgId = d.lastId || u.lastMsgId;
+            u.lastChannelId = chanId || u.lastChannelId;
+            u.lastMsgContent = d.lastContent || u.lastMsgContent;
+            if (recentChannelMsgs) u.recentMsgs = recentChannelMsgs;
+          }
+        }
+      } else {
+        channelsSkippedNoGuild++;
+      }
+      continue;
+    }
     channelsWithGuild++;
 
     const gid = String(chan.guild.id);
@@ -165,8 +271,10 @@ export async function parseDiscordExport(
     }
   }
 
+
   return {
     servers: Array.from(guildMap.values()),
+    users: Array.from(userMap.values()),
     issues,
     importedAt: Date.now(),
   };
