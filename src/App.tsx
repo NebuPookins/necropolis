@@ -396,7 +396,7 @@ function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
               textDecoration: decision === 'leave' ? 'line-through' : 'none',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               fontWeight: decision === 'keep' ? 600 : 400,
-            }}>{u.name}</span>
+            }}>{u.manual.name || u.name}</span>
             {decision === 'keep' && <span style={{color:'var(--green)', fontSize:11}}>★</span>}
           </div>
           <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2, fontFamily: 'monospace' }}>
@@ -527,7 +527,16 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
       </div>
 
       <div>
-        <SectionTitle>manual: when did you last check in?</SectionTitle>
+        <SectionTitle>display name</SectionTitle>
+        <input type="text" value={u.manual.name ?? ''}
+               onChange={(e) => onUpdate({ name: e.target.value || undefined })}
+               placeholder={u.name}
+               style={{ background: 'var(--bg-2)', marginTop: 6 }} />
+        <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 4, lineHeight: 1.5 }}>
+          custom name — overrides the auto-generated "{u.name}". leave blank to keep the default.
+        </div>
+
+        <SectionTitle style={{ marginTop: 20 }}>manual: when did you last check in?</SectionTitle>
         <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
           <input type="date" value={m.manualActivityAt || ''}
                  max={today}
@@ -811,7 +820,7 @@ export function App() {
     let list = enrichedUsers;
     if (filter.search) {
       const q = filter.search.toLowerCase();
-      list = list.filter(u => u.name.toLowerCase().includes(q) || u.id.includes(q));
+      list = list.filter(u => (u.manual.name || u.name).toLowerCase().includes(q) || u.id.includes(q));
     }
     if (filter.hideDecided) {
       list = list.filter(u => u.manual.decision === 'undecided');
