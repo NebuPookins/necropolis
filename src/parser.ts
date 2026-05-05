@@ -142,7 +142,12 @@ export async function parseDiscordExport(
 
         if (msgsJson) {
           try {
-            const arr = JSON.parse(await msgsJson.async('text')) as Record<string, unknown>[];
+            // Quote numeric IDs before JSON.parse to avoid precision loss on
+            // large Discord snowflakes (> Number.MAX_SAFE_INTEGER)
+            const raw = await msgsJson.async('text');
+            const fixed = raw.replace(/"ID":\s*(\d{17,})/g, '"ID":"$1"')
+                             .replace(/"id":\s*(\d{17,})/g, '"id":"$1"');
+            const arr = JSON.parse(fixed) as Record<string, unknown>[];
             if (Array.isArray(arr)) for (const msg of arr) {
               const tsRaw = msg['Timestamp'] ?? msg['timestamp'] ?? msg['created_at'];
               if (!tsRaw) continue;

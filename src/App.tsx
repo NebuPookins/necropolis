@@ -400,7 +400,7 @@ function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
             {decision === 'keep' && <span style={{color:'var(--green)', fontSize:11}}>★</span>}
           </div>
           <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2, fontFamily: 'monospace' }}>
-            {u.id.slice(0, 10)}
+            {u.id}
           </div>
         </div>
         <div style={{ color: 'var(--mid)', fontSize: 11 }} className="col-hide">
@@ -450,8 +450,8 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
   const careLabels = ['leaving', 'meh', 'neutral', 'value', 'essential'];
   const today = new Date().toISOString().slice(0, 10);
   const myFmt = (ms: number | null) => ms ? fmtDate(ms) : '—';
-  const msgLink = u.lastChannelId && u.lastMsgId
-    ? `https://discordapp.com/channels/@me/${u.lastChannelId}/${u.lastMsgId}`
+  const channelLink = u.lastChannelId
+    ? `https://discord.com/channels/@me/${u.lastChannelId}`
     : null;
 
   return (
@@ -467,11 +467,11 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
         <SectionTitle>extracted from export</SectionTitle>
         <DataRow k="last msg" v={myFmt(u.myLastMsg)} />
         <DataRow k="msg count" v={u.myMsgCount} />
-        {msgLink && (
+        {channelLink && (
           <div style={{ marginTop: 8 }}>
-            <a href={msgLink} target="_blank" rel="noopener noreferrer"
+            <a href={channelLink} target="_blank" rel="noopener noreferrer"
                style={{ color: 'var(--amber)', fontSize: 11, textDecoration: 'underline' }}>
-              ▸ open last message in discord
+              ▸ open dm channel in discord
             </a>
           </div>
         )}
