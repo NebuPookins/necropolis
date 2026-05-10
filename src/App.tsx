@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } from 'react';
 import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
@@ -369,13 +369,12 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 // =========================================================================
 interface UserRowProps {
   u: EnrichedDiscordUser;
-  expanded: boolean;
-  onExpand: () => void;
+  onClick: () => void;
   onUpdate: (patch: Partial<ManualEntry>) => void;
   now: number;
 }
 
-function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
+function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
   const tier = deadnessTier(u.deadness);
   const decision = u.manual.decision || 'undecided';
   const refDate = u.manual.manualActivityAt
@@ -383,8 +382,8 @@ function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
     : u.myLastMsg;
 
   return (
-    <div className="row-border" style={{ background: expanded ? 'var(--bg-1)' : 'transparent' }}>
-      <div className="grid-rows" style={{ cursor: 'pointer' }} onClick={onExpand}>
+    <div className="row-border">
+      <div className="grid-rows" style={{ cursor: 'pointer' }} onClick={onClick}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <span style={{
@@ -428,10 +427,9 @@ function UserRow({ u, expanded, onExpand, onUpdate, now }: UserRowProps) {
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <span style={{ color: 'var(--dim)', fontSize: 11 }}>{expanded ? '▾' : '▸'}</span>
+          <span style={{ color: 'var(--dim)', fontSize: 11 }}>open ▸</span>
         </div>
       </div>
-      {expanded && <UserExpandedPanel u={u} onUpdate={onUpdate} now={now} />}
     </div>
   );
 }
@@ -569,6 +567,69 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
 }
 
 // =========================================================================
+// USER MODAL
+// =========================================================================
+interface UserModalProps {
+  user: EnrichedDiscordUser;
+  onClose: () => void;
+  onUpdate: (patch: Partial<ManualEntry>) => void;
+  now: number;
+}
+
+function UserModal({ user, onClose, onUpdate, now }: UserModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const tier = deadnessTier(user.deadness);
+
+  return (
+    <div ref={overlayRef} onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        padding: '40px 24px',
+      }}>
+      <div style={{
+        background: 'var(--bg-0)', border: '1px solid var(--line)',
+        maxWidth: 900, width: '100%', maxHeight: 'calc(100vh - 80px)',
+        overflow: 'auto', position: 'relative',
+      }} className="scroll-thin">
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 10,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '12px 24px', background: 'var(--bg-0)',
+          borderBottom: '1px solid var(--line)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              fontSize: 9, padding: '1px 6px', color: tier.color,
+              border: `1px solid ${tier.bg}`, letterSpacing: '0.1em',
+            }}>{tier.label}</span>
+            <span style={{
+              color: user.manual.decision === 'leave' ? 'var(--dim)' : 'var(--bright)',
+              textDecoration: user.manual.decision === 'leave' ? 'line-through' : 'none',
+              fontWeight: user.manual.decision === 'keep' ? 600 : 400,
+            }}>{user.manual.name || user.name}</span>
+            <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace' }}>{user.id}</span>
+          </div>
+          <button onClick={onClose}
+            style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 16, lineHeight: 1, border: 'none', background: 'transparent', color: 'var(--dim)', cursor: 'pointer' }}>
+            ✕
+          </button>
+        </div>
+        <UserExpandedPanel u={user} onUpdate={onUpdate} now={now} />
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
 // FILTERS
 // =========================================================================
 interface FilterState {
@@ -664,6 +725,7 @@ export function App() {
 
   const [filter, setFilter] = useState<FilterState>({ search: '', hideDecided: false, onlyUnreviewed: false });
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [modalUserId, setModalUserId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -954,8 +1016,7 @@ export function App() {
                     <UserRow
                       key={u.id}
                       u={u}
-                      expanded={expandedId === u.id}
-                      onExpand={() => setExpandedId(expandedId === u.id ? null : u.id)}
+                      onClick={() => setModalUserId(u.id)}
                       onUpdate={(patch) => updateUserManual(u.id, patch)}
                       now={now}
                     />
@@ -1020,6 +1081,20 @@ export function App() {
           </div>
         </div>
       )}
+
+      {modalUserId && (() => {
+        const modalUser = enrichedUsers.find(u => u.id === modalUserId);
+        if (!modalUser) return null;
+        return (
+          <UserModal
+            key={modalUser.id}
+            user={modalUser}
+            onClose={() => setModalUserId(null)}
+            onUpdate={(patch) => updateUserManual(modalUser.id, patch)}
+            now={now}
+          />
+        );
+      })()}
     </div>
   );
 }
