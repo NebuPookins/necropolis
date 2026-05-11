@@ -723,9 +723,23 @@ export function App() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [showLoader, setShowLoader] = useState(false);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+
   const [filter, setFilter] = useState<FilterState>({ search: '', hideDecided: false, onlyUnreviewed: false });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [modalUserId, setModalUserId] = useState<string | null>(null);
+
+  // Focus the scrollable container on scroll keys so the browser handles scrolling natively
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'PageUp' && e.key !== 'PageDown' && e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      const el = e.target as HTMLElement;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
+      scrollRef.current?.focus();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -933,7 +947,7 @@ export function App() {
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Header stats={tab === 'servers' ? stats : userStats} importedAt={importedAt} />
 
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxWidth: 1280, margin: '0 auto', padding: '24px', width: '100%' }} className="scroll-thin">
+      <div ref={scrollRef} tabIndex={-1} style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxWidth: 1280, margin: '0 auto', padding: '24px', width: '100%', outline: 'none' }} className="scroll-thin">
         {showUploadCard && (
           <div style={{ marginBottom: 24 }}>
             <UploadCard onFile={handleFile} parsing={parsing} progress={progress} />
