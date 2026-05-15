@@ -44,7 +44,16 @@ export function computeUserDeadness(
   const care = m.care ?? 3;
   const careMultiplier = (6 - care) / 3;
 
-  return (days / volumeDampener) * careMultiplier;
+  let notFoundMultiplier = 1;
+  if (m.lastSearchedNotFoundAt) {
+    const t = new Date(m.lastSearchedNotFoundAt).getTime();
+    if (!isNaN(t)) {
+      const daysSinceNotFound = Math.max(0, (now - t) / 86400000);
+      notFoundMultiplier = Math.min(1, daysSinceNotFound / 365);
+    }
+  }
+
+  return (days / volumeDampener) * careMultiplier * notFoundMultiplier;
 }
 
 export function deadnessTier(score: number): DeadnessTier {

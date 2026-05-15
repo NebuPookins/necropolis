@@ -22,6 +22,7 @@ export interface ManualEntry {
   care?: number;
   decision?: 'keep' | 'leave' | 'undecided';
   manualActivityAt?: string | null;
+  lastSearchedNotFoundAt?: string | null;
   name?: string;
   notes?: string;
   updatedAt?: number;

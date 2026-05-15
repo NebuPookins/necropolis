@@ -547,6 +547,19 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
           )}
         </div>
 
+        <SectionTitle style={{ marginTop: 20 }}>last searched, not found</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+          <input type="date" value={m.lastSearchedNotFoundAt || ''}
+                 max={today}
+                 onChange={(e) => onUpdate({ lastSearchedNotFoundAt: e.target.value || null })}
+                 style={{ background: 'var(--bg-2)' }} />
+          <button onClick={() => onUpdate({ lastSearchedNotFoundAt: today })}>today</button>
+          {m.lastSearchedNotFoundAt && (
+            <button onClick={() => onUpdate({ lastSearchedNotFoundAt: null })}
+                    style={{ borderColor: 'var(--line)' }}>clear</button>
+          )}
+        </div>
+
         <SectionTitle style={{ marginTop: 20 }}>notes</SectionTitle>
         <textarea value={m.notes || ''}
                   onChange={(e) => onUpdate({ notes: e.target.value })}
@@ -560,6 +573,11 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
           <span title="log volume dampener">log({u.myMsgCount}+2)</span>
           {' × '}
           <span title="care multiplier">(6−{m.care ?? 3})/3</span>
+          {m.lastSearchedNotFoundAt && (() => {
+            const d = Math.max(0, (now - new Date(m.lastSearchedNotFoundAt).getTime()) / 86400000);
+            const mult = Math.min(1, d / 365);
+            return <span> × <span title="not-found penalty">{mult.toFixed(2)}</span></span>;
+          })()}
         </div>
       </div>
     </div>
