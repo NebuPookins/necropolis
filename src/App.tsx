@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } fr
 import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
-import { computeDeadness, computeUserDeadness, deadnessTier, fmtDate, fmtAgo } from './metrics';
+import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo, SPARK_SCALE_FACTOR, MS_PER_DAY } from './metrics';
 import './styles.css';
 
 // =========================================================================
@@ -375,7 +375,7 @@ interface UserRowProps {
 }
 
 function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
-  const tier = deadnessTier(u.deadness);
+  const tier = sparkTier(u.sparkPotential);
   const decision = u.manual.decision || 'undecided';
   const refDate = u.manual.manualActivityAt
     ? new Date(u.manual.manualActivityAt).getTime()
@@ -417,11 +417,11 @@ function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
         </div>
         <div className="col-hide">
           <div style={{ fontSize: 13, color: tier.color, fontWeight: 600 }}>
-            {Math.round(u.deadness)}
+            {Math.round(u.sparkPotential)}
           </div>
           <div className="deadness-bar" style={{ marginTop: 3 }}>
             <div style={{
-              width: `${Math.min(100, u.deadness / 8)}%`,
+              width: `${Math.min(100, u.sparkPotential / 3)}%`,
               background: tier.color,
             }} />
           </div>
@@ -566,17 +566,37 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
                   placeholder="who they are, why you fell out of touch…" />
 
         <div style={{ marginTop: 14, fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace', lineHeight: 1.6 }}>
-          deadness: <span style={{color:'var(--bright)'}}>{Math.round(u.deadness)}</span>
-          {' = '}
-          <span title="days since last message">{u.myLastMsg ? Math.round((now - u.myLastMsg) / 86400000) : '∞'}d</span>
-          {' / '}
-          <span title="log volume dampener">log({u.myMsgCount}+2)</span>
-          {' × '}
-          <span title="care multiplier">(6−{m.care ?? 3})/3</span>
-          {m.lastSearchedNotFoundAt && (() => {
-            const d = Math.max(0, (now - new Date(m.lastSearchedNotFoundAt).getTime()) / 86400000);
-            const mult = Math.min(1, d / 365);
-            return <span> × <span title="not-found penalty">{mult.toFixed(2)}</span></span>;
+          {(() => {
+            // Determine the actual days value that resolveDaysSinceActivity used
+            let displayRefMs: number | null = null;
+            if (m.manualActivityAt) {
+              const t = new Date(m.manualActivityAt).getTime();
+              if (!isNaN(t)) displayRefMs = t;
+            }
+            if (displayRefMs === null) displayRefMs = u.myLastMsg;
+            const displayDays = displayRefMs !== null
+              ? Math.round((now - displayRefMs) / MS_PER_DAY)
+              : null;
+            const daysStr = displayDays !== null ? `${displayDays}d` : '∞';
+
+            return <>
+              spark: <span style={{color:'var(--bright)'}}>{Math.round(u.sparkPotential)}</span>
+              {' = '}
+              <span title="log volume">log({u.myMsgCount}+2)</span>
+              {' × '}
+              <span title="time factor: 1 - e^(-days/365)">1−e<sup>−{daysStr}/365</sup></span>
+              {' × '}
+              <span title="care factor">(0.2 + {m.care ?? 3}/3 × 0.8)</span>
+              {' × '}{SPARK_SCALE_FACTOR}
+              {m.lastSearchedNotFoundAt && (() => {
+                const t = new Date(m.lastSearchedNotFoundAt).getTime();
+                if (isNaN(t)) return null;
+                const d = Math.max(0, (now - t) / MS_PER_DAY);
+                if (d < 90) return <span style={{color: 'var(--orange)'}}> × <span title="not-found within 90 days → zero">ZERO</span></span>;
+                if (d < 365) return <span> × <span title="partial not-found penalty">{Math.round((d - 90) / (365 - 90) * 100)}% recovered</span></span>;
+                return null;
+              })()}
+            </>;
           })()}
         </div>
       </div>
@@ -603,7 +623,7 @@ function UserModal({ user, onClose, onUpdate, now }: UserModalProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const tier = deadnessTier(user.deadness);
+  const tier = sparkTier(user.sparkPotential);
 
   return (
     <div ref={overlayRef} onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
@@ -881,7 +901,7 @@ export function App() {
     return users.map(u => ({
       ...u,
       manual: userManual[u.id] || { care: 3, decision: 'undecided' as const },
-      deadness: computeUserDeadness(u, userManual[u.id], now),
+      sparkPotential: computeSparkPotential(u, userManual[u.id], now),
     }));
   }, [users, userManual, now]);
 
@@ -927,10 +947,7 @@ export function App() {
       const aLeave = a.manual.decision === 'leave';
       const bLeave = b.manual.decision === 'leave';
       if (aLeave !== bLeave) return aLeave ? 1 : -1;
-      const careA = a.manual.care ?? 3;
-      const careB = b.manual.care ?? 3;
-      if (careA !== careB) return careA - careB;
-      return b.deadness - a.deadness;
+      return b.sparkPotential - a.sparkPotential;
     };
     return [...list].sort(sorter);
   }, [enrichedUsers, filter]);
@@ -1040,7 +1057,7 @@ export function App() {
                   <div className="col-hide">your msgs</div>
                   <div className="col-hide">care</div>
                   <div className="col-hide">decision</div>
-                  <div className="col-hide">deadness</div>
+                  <div className="col-hide">spark</div>
                   <div></div>
                 </div>
                 <div>
@@ -1085,18 +1102,18 @@ export function App() {
             <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginTop: 2 }}>
               deadness = days_since_engagement / log(my_msg_count + 2) × (6 − care) / 3
             </code>
+            tier cutoffs: alive &lt;30 · quiet &lt;90 · stale &lt;200 · decay &lt;500 · grave ≥500.
           </div>
           <div style={{ marginBottom: 12 }}>
-            <strong style={{ color: 'var(--mid)' }}>users</strong>
+            <strong style={{ color: 'var(--mid)' }}>users (spark potential)</strong>
             <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginTop: 2 }}>
-              deadness = days_since_last_msg / log(your_msg_count + 2) × (6 − care) / 3
+              spark = log(your_msg_count + 2) × (1 − e<sup>−days/365</sup>) × (0.2 + care/3 × 0.8) × 50
             </code>
-            same formula as servers, but using your last message timestamp from the DM conversation.
+            scores past relationship depth — more messages = stronger foundation to rebuild on.
+            long silence is a weak positive signal (it asymptotes after ~2 years).
+            if you searched and couldn't find them within the last 90 days, spark is zero.
+            tier cutoffs: bright ≥150 · warm ≥60 · ember ≥20 · cold ≥5 · frozen &lt;5.
           </div>
-          your last message in a server (or your manual override date if set) is the engagement timestamp.
-          higher message volume dampens the score so heavy-use servers don't dominate "alive" rankings.
-          care=3 is neutral; care=5 cuts the score by ⅔; care=1 nearly doubles it.
-          tier cutoffs: alive &lt;30 · quiet &lt;90 · stale &lt;200 · decay &lt;500 · grave ≥500.
         </div>
       </div>
 

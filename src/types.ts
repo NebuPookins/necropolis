@@ -37,7 +37,7 @@ export interface EnrichedServer extends Server {
 
 export interface EnrichedDiscordUser extends DiscordUser {
   manual: ManualEntry;
-  deadness: number;
+  sparkPotential: number;
 }
 
 export interface ParseResult {
