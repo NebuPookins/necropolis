@@ -60,8 +60,8 @@ export function computeSparkPotential(
 
   const days = resolveDaysSinceActivity(m.manualActivityAt, user.myLastMsg, now);
 
-  // Volume factor: more messages = stronger foundation for reconnecting
-  const volumeFactor = Math.log(user.myMsgCount + 2);
+  // Volume factor: capped at ~10 messages so past a few messages it stops mattering.
+  const volumeFactor = Math.log(Math.min(user.myMsgCount, 10) + 2);
 
   // Time factor: increases from 0 (just talked) toward 1 (years ago).
   const timeFactor = 1 - Math.exp(-days / 365);
