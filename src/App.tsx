@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } fr
 import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
-import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo, SPARK_SCALE_FACTOR, MS_PER_DAY } from './metrics';
+import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo } from './metrics';
 import './styles.css';
 
 // =========================================================================
@@ -375,7 +375,7 @@ interface UserRowProps {
 }
 
 function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
-  const tier = sparkTier(u.sparkPotential);
+  const tier = sparkTier(u.sparkPotential.score);
   const decision = u.manual.decision || 'undecided';
   const refDate = u.manual.manualActivityAt
     ? new Date(u.manual.manualActivityAt).getTime()
@@ -417,11 +417,11 @@ function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
         </div>
         <div className="col-hide">
           <div style={{ fontSize: 13, color: tier.color, fontWeight: 600 }}>
-            {Math.round(u.sparkPotential)}
+            {Math.round(u.sparkPotential.score)}
           </div>
           <div className="deadness-bar" style={{ marginTop: 3 }}>
             <div style={{
-              width: `${Math.min(100, u.sparkPotential / 3)}%`,
+              width: `${Math.min(100, u.sparkPotential.score / 3)}%`,
               background: tier.color,
             }} />
           </div>
@@ -566,38 +566,14 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
                   placeholder="who they are, why you fell out of touch…" />
 
         <div style={{ marginTop: 14, fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace', lineHeight: 1.6 }}>
-          {(() => {
-            // Determine the actual days value that resolveDaysSinceActivity used
-            let displayRefMs: number | null = null;
-            if (m.manualActivityAt) {
-              const t = new Date(m.manualActivityAt).getTime();
-              if (!isNaN(t)) displayRefMs = t;
-            }
-            if (displayRefMs === null) displayRefMs = u.myLastMsg;
-            const displayDays = displayRefMs !== null
-              ? Math.round((now - displayRefMs) / MS_PER_DAY)
-              : null;
-            const daysStr = displayDays !== null ? `${displayDays}d` : '∞';
-
-            return <>
-              spark: <span style={{color:'var(--bright)'}}>{Math.round(u.sparkPotential)}</span>
-              {' = '}
-              <span title="log volume capped at 10">log(min({u.myMsgCount},10)+2)</span>
-              {' × '}
-              <span title="time factor: 1 - e^(-days/365)">1−e<sup>−{daysStr}/365</sup></span>
-              {' × '}
-              <span title="care factor">(0.2 + {m.care ?? 3}/3 × 0.8)</span>
-              {' × '}{SPARK_SCALE_FACTOR}
-              {m.lastSearchedNotFoundAt && (() => {
-                const t = new Date(m.lastSearchedNotFoundAt).getTime();
-                if (isNaN(t)) return null;
-                const d = Math.max(0, (now - t) / MS_PER_DAY);
-                if (d < 90) return <span style={{color: 'var(--orange)'}}> × <span title="not-found within 90 days → zero">ZERO</span></span>;
-                if (d < 365) return <span> × <span title="partial not-found penalty">{Math.round((d - 90) / (365 - 90) * 100)}% recovered</span></span>;
-                return null;
-              })()}
-            </>;
-          })()}
+          spark: <span style={{color:'var(--bright)'}}>{Math.round(u.sparkPotential.score)}</span>
+          {' = '}
+          {u.sparkPotential.factors.map((f, i) => (
+            <span key={f.label}>
+              {i > 0 && <span>{' × '}</span>}
+              <span title={`${f.label}: ${f.expression}`}>{f.expressionInlined}</span>
+            </span>
+          ))}
         </div>
       </div>
     </div>
@@ -623,7 +599,7 @@ function UserModal({ user, onClose, onUpdate, now }: UserModalProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const tier = sparkTier(user.sparkPotential);
+  const tier = sparkTier(user.sparkPotential.score);
 
   return (
     <div ref={overlayRef} onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
@@ -948,7 +924,7 @@ export function App() {
       const aLeave = a.manual.decision === 'leave';
       const bLeave = b.manual.decision === 'leave';
       if (aLeave !== bLeave) return aLeave ? 1 : -1;
-      return b.sparkPotential - a.sparkPotential;
+      return b.sparkPotential.score - a.sparkPotential.score;
     };
     return [...list].sort(sorter);
   }, [enrichedUsers, filter]);

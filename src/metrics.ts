@@ -1,4 +1,4 @@
-import type { ManualEntry, DeadnessTier, Server } from './types';
+import type { ManualEntry, DeadnessTier, Server, SparkResult, Factor } from './types';
 
 /** Number of milliseconds in a day. */
 export const MS_PER_DAY = 86400000;
@@ -40,20 +40,21 @@ export function computeSparkPotential(
   user: { myLastMsg: number | null; myMsgCount: number },
   manual: ManualEntry | undefined,
   now: number,
-): number {
+): SparkResult {
   const m = manual || {};
 
   // Not-found penalty: applied as a multiplier on the full formula so the
   // score stays on a consistent scale — no overnight tier jumps.
   let notFoundPenalty = 1;
+  let notFoundDays: number | null = null;
   if (m.lastSearchedNotFoundAt) {
     const t = new Date(m.lastSearchedNotFoundAt).getTime();
     if (!isNaN(t)) {
-      const daysSinceNotFound = Math.max(0, (now - t) / MS_PER_DAY);
+      notFoundDays = Math.max(0, (now - t) / MS_PER_DAY);
       // First 90 days after a failed search → zero (can't re-spark what you can't find).
-      if (daysSinceNotFound < 90) notFoundPenalty = 0;
+      if (notFoundDays < 90) notFoundPenalty = 0;
       // Gradual ramp back over the rest of the year.
-      else if (daysSinceNotFound < 365) notFoundPenalty = (daysSinceNotFound - 90) / (365 - 90);
+      else if (notFoundDays < 365) notFoundPenalty = (notFoundDays - 90) / (365 - 90);
       // After 1 year: penalty fully decayed
     }
   }
@@ -61,7 +62,9 @@ export function computeSparkPotential(
   const days = resolveDaysSinceActivity(m.manualActivityAt, user.myLastMsg, now);
 
   // Volume factor: capped at ~10 messages so past a few messages it stops mattering.
-  const volumeFactor = Math.log(Math.min(user.myMsgCount, 10) + 2);
+  const cappedCount = Math.min(user.myMsgCount, 10);
+  const volumeLogArg = cappedCount + 2;
+  const volumeFactor = Math.log(volumeLogArg);
 
   // Time factor: increases from 0 (just talked) toward 1 (years ago).
   const timeFactor = 1 - Math.exp(-days / 365);
@@ -70,7 +73,55 @@ export function computeSparkPotential(
   const care = m.care ?? 3;
   const careFactor = 0.2 + (care / 3) * 0.8;
 
-  return volumeFactor * timeFactor * careFactor * SPARK_SCALE_FACTOR * notFoundPenalty;
+  const factors: Factor[] = [
+    {
+      label: 'volume',
+      expression: 'log(min(msgCount, 10) + 2)',
+      expressionInlined: `log(min(${user.myMsgCount}, 10) + 2)`,
+      value: volumeFactor,
+    },
+    {
+      label: 'time',
+      expression: '1 − exp(−days / 365)',
+      expressionInlined: `1 − exp(−${Math.round(days)}d / 365)`,
+      value: timeFactor,
+    },
+    {
+      label: 'care',
+      expression: '0.2 + care/3 × 0.8',
+      expressionInlined: `0.2 + ${care}/3 × 0.8`,
+      value: careFactor,
+    },
+    {
+      label: 'scale',
+      expression: String(SPARK_SCALE_FACTOR),
+      expressionInlined: String(SPARK_SCALE_FACTOR),
+      value: SPARK_SCALE_FACTOR,
+    },
+  ];
+
+  // Only include the not-found penalty when it's actively reducing the score.
+  if (notFoundPenalty < 1) {
+    let inlined: string;
+    if (notFoundPenalty === 0) {
+      inlined = 'ZERO';
+    } else if (notFoundDays !== null) {
+      const pct = Math.round((notFoundDays - 90) / (365 - 90) * 100);
+      inlined = `${pct}% recovered`;
+    } else {
+      inlined = `${Math.round(notFoundPenalty * 100)}%`;
+    }
+    factors.push({
+      label: 'not-found',
+      expression: 'not-found penalty',
+      expressionInlined: inlined,
+      value: notFoundPenalty,
+    });
+  }
+
+  const score = factors.reduce((acc, f) => acc * f.value, 1);
+
+  return { score, factors };
 }
 
 export function sparkTier(score: number): DeadnessTier {

@@ -13,18 +13,18 @@ describe('computeSparkPotential ranking', () => {
   it('longer silence ranks higher when volume and care are equal', () => {
     const recent = computeSparkPotential(user(5, 10), undefined, NOW);
     const distant = computeSparkPotential(user(5, 60), undefined, NOW);
-    expect(distant).toBeGreaterThan(recent);
+    expect(distant.score).toBeGreaterThan(recent.score);
   });
 
   it('10 messages / 2mo silence ranks above a billion messages / 1mo silence', () => {
     const a = computeSparkPotential(user(1_000_000_000, 30), undefined, NOW);
     const b = computeSparkPotential(user(10, 60), undefined, NOW);
-    expect(b).toBeGreaterThan(a);
+    expect(b.score).toBeGreaterThan(a.score);
   });
 
   it('234 messages / 61 days ranks above 810 messages / 53 days (longer silence despite lower volume)', () => {
     const a = computeSparkPotential(user(810, 53), undefined, NOW);
     const b = computeSparkPotential(user(234, 61), undefined, NOW);
-    expect(b).toBeGreaterThan(a);
+    expect(b.score).toBeGreaterThan(a.score);
   });
 });
