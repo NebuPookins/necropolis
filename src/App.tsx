@@ -582,7 +582,7 @@ function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
             return <>
               spark: <span style={{color:'var(--bright)'}}>{Math.round(u.sparkPotential)}</span>
               {' = '}
-              <span title="log volume">log({u.myMsgCount}+2)</span>
+              <span title="log volume capped at 10">log(min({u.myMsgCount},10)+2)</span>
               {' × '}
               <span title="time factor: 1 - e^(-days/365)">1−e<sup>−{daysStr}/365</sup></span>
               {' × '}
@@ -735,7 +735,8 @@ function FooterActions({ onReplaceData, onExport, onImport, onResetManual, onRes
         <input type="file" accept=".json" ref={fileRef} style={{ display: 'none' }}
                onChange={(e) => e.target.files?.[0] && onImport(e.target.files[0])} />
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace' }}>{__GIT_HASH__}</span>
         <button onClick={onResetManual} className="btn-red">reset manual data</button>
         <button onClick={onResetAll} className="btn-red">wipe everything</button>
       </div>
@@ -1107,9 +1108,9 @@ export function App() {
           <div style={{ marginBottom: 12 }}>
             <strong style={{ color: 'var(--mid)' }}>users (spark potential)</strong>
             <code style={{ color: 'var(--bright)', fontSize: 11, display: 'block', marginTop: 2 }}>
-              spark = log(your_msg_count + 2) × (1 − e<sup>−days/365</sup>) × (0.2 + care/3 × 0.8) × 50
+              spark = log(min(your_msg_count, 10) + 2) × (1 − e<sup>−days/365</sup>) × (0.2 + care/3 × 0.8) × 50
             </code>
-            scores past relationship depth — more messages = stronger foundation to rebuild on.
+            volume capped at 10 messages — recency and care dominate beyond that.
             long silence is a weak positive signal (it asymptotes after ~2 years).
             if you searched and couldn't find them within the last 90 days, spark is zero.
             tier cutoffs: bright ≥150 · warm ≥60 · ember ≥20 · cold ≥5 · frozen &lt;5.

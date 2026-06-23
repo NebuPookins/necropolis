@@ -21,4 +21,10 @@ describe('computeSparkPotential ranking', () => {
     const b = computeSparkPotential(user(10, 60), undefined, NOW);
     expect(b).toBeGreaterThan(a);
   });
+
+  it('234 messages / 61 days ranks above 810 messages / 53 days (longer silence despite lower volume)', () => {
+    const a = computeSparkPotential(user(810, 53), undefined, NOW);
+    const b = computeSparkPotential(user(234, 61), undefined, NOW);
+    expect(b).toBeGreaterThan(a);
+  });
 });
