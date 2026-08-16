@@ -712,7 +712,7 @@ function FooterActions({ onReplaceData, onExport, onImport, onResetManual, onRes
                onChange={(e) => e.target.files?.[0] && onImport(e.target.files[0])} />
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace' }}>{__GIT_HASH__}</span>
+        <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'monospace' }}>git commit: {__GIT_HASH__ || '&lt;unknown&gt;'}</span>
         <button onClick={onResetManual} className="btn-red">reset manual data</button>
         <button onClick={onResetAll} className="btn-red">wipe everything</button>
       </div>
