@@ -732,6 +732,7 @@ export function App() {
   const [issues, setIssues] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [tab, setTab] = useState<'servers' | 'users'>('servers');
+  const [saveFailed, setSaveFailed] = useState(false);
 
   const [parsing, setParsing] = useState(false);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
@@ -776,6 +777,11 @@ export function App() {
     })();
   }, []);
 
+  const persistAll = useCallback(async (writes: Promise<boolean>[]) => {
+    const results = await Promise.all(writes);
+    setSaveFailed(results.includes(false));
+  }, []);
+
   const handleFile = async (file: File) => {
     setParsing(true);
     setParseError(null);
@@ -786,10 +792,12 @@ export function App() {
       setUsers(result.users);
       setImportedAt(result.importedAt);
       setIssues(result.issues);
-      await Store.set('servers', result.servers);
-      await Store.set('users', result.users);
-      await Store.set('importedAt', result.importedAt);
-      await Store.set('issues', result.issues);
+      await persistAll([
+        Store.set('servers', result.servers),
+        Store.set('users', result.users),
+        Store.set('importedAt', result.importedAt),
+        Store.set('issues', result.issues),
+      ]);
       setShowLoader(false);
     } catch (e) {
       console.error(e);
@@ -804,7 +812,7 @@ export function App() {
       const cur = prev[id] || { care: 3, decision: 'undecided' as const };
       const next = { ...cur, ...patch, updatedAt: Date.now() };
       const all = { ...prev, [id]: next };
-      Store.set('manual', all);
+      Store.set('manual', all).then(ok => setSaveFailed(!ok));
       return all;
     });
   }, []);
@@ -814,7 +822,7 @@ export function App() {
       const cur = prev[id] || { care: 3, decision: 'undecided' as const };
       const next = { ...cur, ...patch, updatedAt: Date.now() };
       const all = { ...prev, [id]: next };
-      Store.set('userManual', all);
+      Store.set('userManual', all).then(ok => setSaveFailed(!ok));
       return all;
     });
   }, []);
@@ -840,11 +848,13 @@ export function App() {
       setManual(data.manual);
       setUserManual(data.userManual ?? {});
       setImportedAt(data.importedAt || Date.now());
-      await Store.set('servers', data.servers);
-      await Store.set('users', data.users ?? []);
-      await Store.set('manual', data.manual);
-      await Store.set('userManual', data.userManual ?? {});
-      await Store.set('importedAt', data.importedAt || Date.now());
+      await persistAll([
+        Store.set('servers', data.servers),
+        Store.set('users', data.users ?? []),
+        Store.set('manual', data.manual),
+        Store.set('userManual', data.userManual ?? {}),
+        Store.set('importedAt', data.importedAt || Date.now()),
+      ]);
     } catch (e) {
       alert('import failed: ' + (e instanceof Error ? e.message : String(e)));
     }
@@ -958,6 +968,13 @@ export function App() {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Header stats={tab === 'servers' ? stats : userStats} importedAt={importedAt} />
+
+      {saveFailed && (
+        <div style={{ padding: '10px 24px', background: 'var(--red-dim)', color: 'var(--red)', fontSize: 12, textAlign: 'center', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12 }}>
+          <span>✕ your last change couldn't be saved (browser storage may be full). export state.json to avoid losing changes.</span>
+          <button onClick={() => setSaveFailed(false)} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>dismiss</button>
+        </div>
+      )}
 
       <div ref={scrollRef} tabIndex={-1} style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxWidth: 1280, margin: '0 auto', padding: '24px', width: '100%', outline: 'none' }} className="scroll-thin">
         {showUploadCard && (

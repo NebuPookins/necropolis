@@ -9,11 +9,13 @@ export const Store = {
       return def;
     }
   },
-  async set(key: string, val: unknown): Promise<void> {
+  async set(key: string, val: unknown): Promise<boolean> {
     try {
       localStorage.setItem(K(key), JSON.stringify(val));
+      return true;
     } catch (e) {
       console.error('storage.set failed', e);
+      return false;
     }
   },
   async del(key: string): Promise<void> {
