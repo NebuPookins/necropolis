@@ -1,25 +1,37 @@
 import JSZip from 'jszip';
 import type { DiscordUser, Server, ParseResult, ProgressInfo } from './types';
 
-function parseCsvRow(line: string): string[] {
-  const out: string[] = [];
+/** Parse CSV records, including newlines inside quoted fields. */
+export function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let cur = '';
   let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (q) {
       if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
+        if (text[i + 1] === '"') { cur += '"'; i++; }
         else q = false;
       } else cur += c;
     } else {
       if (c === '"') q = true;
-      else if (c === ',') { out.push(cur); cur = ''; }
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(cur);
+        rows.push(row);
+        row = [];
+        cur = '';
+      }
       else cur += c;
     }
   }
-  out.push(cur);
-  return out;
+  if (cur || row.length > 0) {
+    row.push(cur);
+    rows.push(row);
+  }
+  return rows;
 }
 
 /** Find the actual casing of a top-level directory in the zip (e.g. "Messages" vs "messages"). */
@@ -166,15 +178,13 @@ export async function parseDiscordExport(
         } else if (msgsCsv) {
           try {
             const text = await msgsCsv.async('text');
-            const lines = text.split(/\r?\n/);
-            const header = lines[0] ? parseCsvRow(lines[0]) : [];
+            const rows = parseCsvRows(text);
+            const header = rows[0] ?? [];
             const tsIdx = header.findIndex(h => /timestamp/i.test(h));
             const idIdx = header.findIndex(h => /^id$/i.test(h));
             const contentIdx = header.findIndex(h => /contents|content|message/i.test(h));
             if (tsIdx >= 0) {
-              for (let j = 1; j < lines.length; j++) {
-                if (!lines[j].trim()) continue;
-                const cols = parseCsvRow(lines[j]);
+              for (const cols of rows.slice(1)) {
                 const tsRaw = cols[tsIdx];
                 if (!tsRaw) continue;
                 const t = new Date(tsRaw).getTime();
@@ -256,11 +266,8 @@ export async function parseDiscordExport(
     } else if (msgsCsv) {
       try {
         const text = await msgsCsv.async('text');
-        const lines = text.split(/\r?\n/);
-        for (let j = 1; j < lines.length; j++) {
-          const line = lines[j];
-          if (!line.trim()) continue;
-          const cols = parseCsvRow(line);
+        const rows = parseCsvRows(text);
+        for (const cols of rows.slice(1)) {
           if (cols.length >= 2 && cols[1]) timestamps.push(cols[1]);
         }
       } catch {
