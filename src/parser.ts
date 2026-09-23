@@ -34,6 +34,14 @@ export function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
+/**
+ * Quote numeric ID fields before JSON.parse to avoid precision loss on large
+ * Discord snowflakes (> Number.MAX_SAFE_INTEGER).
+ */
+function quoteSnowflakeIds(raw: string): string {
+  return raw.replace(/"id":\s*(\d{17,})/gi, '"id":"$1"');
+}
+
 /** Find the actual casing of a top-level directory in the zip (e.g. "Messages" vs "messages"). */
 function detectDir(zip: JSZip, name: string): string | null {
   const lower = name.toLowerCase();
@@ -118,7 +126,8 @@ export async function parseDiscordExport(
       recipients?: unknown;
     };
     try {
-      chan = JSON.parse(await chanFile.async('text')) as typeof chan;
+      const raw = await chanFile.async('text');
+      chan = JSON.parse(quoteSnowflakeIds(raw)) as typeof chan;
     } catch {
       issues.push(`Bad channel.json in ${ck}`);
       continue;
@@ -154,12 +163,8 @@ export async function parseDiscordExport(
 
         if (msgsJson) {
           try {
-            // Quote numeric IDs before JSON.parse to avoid precision loss on
-            // large Discord snowflakes (> Number.MAX_SAFE_INTEGER)
             const raw = await msgsJson.async('text');
-            const fixed = raw.replace(/"ID":\s*(\d{17,})/g, '"ID":"$1"')
-                             .replace(/"id":\s*(\d{17,})/g, '"id":"$1"');
-            const arr = JSON.parse(fixed) as Record<string, unknown>[];
+            const arr = JSON.parse(quoteSnowflakeIds(raw)) as Record<string, unknown>[];
             if (Array.isArray(arr)) for (const msg of arr) {
               const tsRaw = msg['Timestamp'] ?? msg['timestamp'] ?? msg['created_at'];
               if (!tsRaw) continue;
