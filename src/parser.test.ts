@@ -42,3 +42,26 @@ describe('parseDiscordExport', () => {
     expect(result.servers[0].id).toBe(guildId);
   });
 });
+
+describe('parseDiscordExport DM recipients', () => {
+  async function exportWithDm(userJson?: string) {
+    const zip = new JSZip();
+    zip.file('messages/c1/channel.json', '{"id":"c1","type":"DM","recipients":["111111111111111111","222222222222222222"]}');
+    zip.file('messages/c1/messages.csv', 'ID,Timestamp,Contents\n1,2024-01-01T00:00:00.000Z,hi\n');
+    if (userJson) zip.file('account/user.json', userJson);
+    const buf = await zip.generateAsync({ type: 'arraybuffer' });
+    return parseDiscordExport(buf as unknown as File);
+  }
+
+  it('excludes the exporting account from the DM user list', async () => {
+    const result = await exportWithDm('{"id":111111111111111111,"username":"me"}');
+
+    expect(result.users.map(u => u.id)).toEqual(['222222222222222222']);
+  });
+
+  it('keeps all recipients when the account file is missing', async () => {
+    const result = await exportWithDm();
+
+    expect(result.users.map(u => u.id).sort()).toEqual(['111111111111111111', '222222222222222222']);
+  });
+});

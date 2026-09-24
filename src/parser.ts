@@ -55,6 +55,23 @@ function detectDir(zip: JSZip, name: string): string | null {
   return found;
 }
 
+/**
+ * Read the exporting account's own user ID from Account/user.json. Discord
+ * lists the exporter among every DM's recipients, so callers need this to
+ * avoid treating the exporter as one of their own contacts.
+ */
+async function readOwnUserId(zip: JSZip): Promise<string | null> {
+  const [userFile] = zip.file(/^account\/user\.json$/i);
+  if (!userFile) return null;
+  try {
+    const data: unknown = JSON.parse(quoteSnowflakeIds(await userFile.async('text')));
+    const id = typeof data === 'object' && data !== null && 'id' in data ? data.id : undefined;
+    return id == null || id === '' ? null : String(id);
+  } catch {
+    return null;
+  }
+}
+
 export async function parseDiscordExport(
   file: File,
   onProgress?: (p: ProgressInfo) => void,
@@ -102,6 +119,7 @@ export async function parseDiscordExport(
     }
   }
 
+  const ownUserId = await readOwnUserId(zip);
   const userMap = new Map<string, DiscordUser>();
 
   let channelsWithGuild = 0;
@@ -146,7 +164,7 @@ export async function parseDiscordExport(
           }
           const o = r as Record<string, unknown>;
           return { id: String(o.id ?? o.ID ?? ''), name: String(o.global_name ?? o.username ?? o.id ?? '').slice(0, 60) };
-        }).filter(r => r.id);
+        }).filter(r => r.id && r.id !== ownUserId);
 
         const chanId = String(chan.id ?? '').replace(/^c/, '');
 
