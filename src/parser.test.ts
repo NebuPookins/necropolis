@@ -44,9 +44,9 @@ describe('parseDiscordExport', () => {
 });
 
 describe('parseDiscordExport DM recipients', () => {
-  async function exportWithDm(userJson?: string) {
+  async function exportWithDm(userJson?: string, type = '"DM"') {
     const zip = new JSZip();
-    zip.file('messages/c1/channel.json', '{"id":"c1","type":"DM","recipients":["111111111111111111","222222222222222222"]}');
+    zip.file('messages/c1/channel.json', `{"id":"c1","type":${type},"recipients":["111111111111111111","222222222222222222"]}`);
     zip.file('messages/c1/messages.csv', 'ID,Timestamp,Contents\n1,2024-01-01T00:00:00.000Z,hi\n');
     if (userJson) zip.file('account/user.json', userJson);
     const buf = await zip.generateAsync({ type: 'arraybuffer' });
@@ -63,5 +63,11 @@ describe('parseDiscordExport DM recipients', () => {
     const result = await exportWithDm();
 
     expect(result.users.map(u => u.id).sort()).toEqual(['111111111111111111', '222222222222222222']);
+  });
+
+  it.each(['1', '3'])('recognizes legacy numeric DM channel type %s', async (type) => {
+    const result = await exportWithDm('{"id":111111111111111111,"username":"me"}', type);
+
+    expect(result.users.map(u => u.id)).toEqual(['222222222222222222']);
   });
 });

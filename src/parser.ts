@@ -42,6 +42,15 @@ function quoteSnowflakeIds(raw: string): string {
   return raw.replace(/"id":\s*(\d{17,})/gi, '"id":"$1"');
 }
 
+/**
+ * Whether a channel.json `type` denotes a DM or group DM. Newer exports use
+ * string names; older ones use Discord's numeric channel types (1 = DM,
+ * 3 = GROUP_DM).
+ */
+function isDmChannelType(type: unknown): boolean {
+  return type === 'DM' || type === 'GROUP_DM' || type === 1 || type === 3;
+}
+
 /** Find the actual casing of a top-level directory in the zip (e.g. "Messages" vs "messages"). */
 function detectDir(zip: JSZip, name: string): string | null {
   const lower = name.toLowerCase();
@@ -152,7 +161,7 @@ export async function parseDiscordExport(
     }
 
     if (!chan.guild) {
-      const isDm = chan.type === 'DM' || chan.type === 'GROUP_DM';
+      const isDm = isDmChannelType(chan.type);
       const raw = chan.recipients ?? [];
       const hasRecipients = Array.isArray(raw) && raw.length > 0;
 
