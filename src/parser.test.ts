@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { parseCsvRows, parseDiscordExport } from './parser';
 
+/** Build an in-memory export zip from path → contents and parse it. */
+async function parseZip(files: Record<string, string>) {
+  const zip = new JSZip();
+  for (const [path, contents] of Object.entries(files)) zip.file(path, contents);
+  const buf = await zip.generateAsync({ type: 'arraybuffer' });
+  return parseDiscordExport(buf as unknown as File);
+}
+
 describe('parseCsvRows', () => {
   it('keeps a quoted multiline message in one record', () => {
     const rows = parseCsvRows(
@@ -69,5 +77,44 @@ describe('parseDiscordExport DM recipients', () => {
     const result = await exportWithDm('{"id":111111111111111111,"username":"me"}', type);
 
     expect(result.users.map(u => u.id)).toEqual(['222222222222222222']);
+  });
+});
+
+describe('parseDiscordExport message timestamps', () => {
+  const exportWithGuildCsv = (csv: string) => parseZip({
+    'messages/c1/channel.json': '{"id":"1","type":0,"guild":{"id":"42","name":"G"}}',
+    'messages/c1/messages.csv': csv,
+  });
+
+  it('locates the server timestamp column from the CSV header', async () => {
+    const result = await exportWithGuildCsv(
+      'Timestamp,ID,Contents\n2024-01-01T00:00:00.000Z,1,a\n2024-03-01T00:00:00.000Z,2,b\n',
+    );
+
+    expect(result.servers[0].myFirstMsg).toBe(Date.parse('2024-01-01T00:00:00.000Z'));
+    expect(result.servers[0].myLastMsg).toBe(Date.parse('2024-03-01T00:00:00.000Z'));
+  });
+
+  it('does not count server messages whose timestamp cannot be parsed', async () => {
+    const result = await exportWithGuildCsv(
+      'ID,Timestamp,Contents\n1,2024-01-01T00:00:00.000Z,a\n2,not a date,b\n',
+    );
+
+    expect(result.servers[0].myMsgCount).toBe(1);
+  });
+
+  it('reports the newest DM message and recent previews newest first', async () => {
+    const { users: [user] } = await parseZip({
+      'messages/c9/channel.json': '{"id":"9","type":"DM","recipients":["222222222222222222"]}',
+      'messages/c9/messages.json': JSON.stringify([
+        { ID: '1', Timestamp: '2024-01-01T00:00:00.000Z', Contents: 'old' },
+        { ID: '2', Timestamp: '2024-02-01T00:00:00.000Z', Contents: 'new' },
+      ]),
+    });
+
+    expect(user.myMsgCount).toBe(2);
+    expect(user.lastMsgId).toBe('2');
+    expect(user.lastMsgContent).toBe('new');
+    expect(user.recentMsgs?.map(m => m.content)).toEqual(['new', 'old']);
   });
 });

@@ -51,6 +51,76 @@ function isDmChannelType(type: unknown): boolean {
   return type === 'DM' || type === 'GROUP_DM' || type === 1 || type === 3;
 }
 
+/** A single message read from a channel's messages.json or messages.csv. */
+interface ChannelMessage {
+  readonly id: string;
+  readonly ts: number;
+  readonly content: string;
+}
+
+type ChannelMessagesResult =
+  | { readonly ok: true; readonly messages: readonly ChannelMessage[] }
+  | { readonly ok: false; readonly file: string };
+
+/** Parse a message timestamp to epoch ms, or null if missing/unparseable. */
+function parseTimestamp(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const t = new Date(String(raw)).getTime();
+  return isNaN(t) ? null : t;
+}
+
+function messagesFromJson(raw: string): ChannelMessage[] {
+  const arr: unknown = JSON.parse(quoteSnowflakeIds(raw));
+  if (!Array.isArray(arr)) return [];
+  return arr.flatMap((msg: Record<string, unknown>) => {
+    const ts = parseTimestamp(msg['Timestamp'] ?? msg['timestamp'] ?? msg['created_at']);
+    if (ts === null) return [];
+    return [{
+      id: String(msg['ID'] ?? msg['id'] ?? ''),
+      ts,
+      content: String(msg['Contents'] ?? msg['Content'] ?? msg['content'] ?? ''),
+    }];
+  });
+}
+
+function messagesFromCsv(text: string): ChannelMessage[] {
+  const [header = [], ...rows] = parseCsvRows(text);
+  const tsIdx = header.findIndex(h => /timestamp/i.test(h));
+  if (tsIdx < 0) return [];
+  const idIdx = header.findIndex(h => /^id$/i.test(h));
+  const contentIdx = header.findIndex(h => /contents|content|message/i.test(h));
+  return rows.flatMap(cols => {
+    const ts = parseTimestamp(cols[tsIdx]);
+    if (ts === null) return [];
+    return [{
+      id: cols[idIdx] ?? '',
+      ts,
+      content: cols[contentIdx] ?? '',
+    }];
+  });
+}
+
+/**
+ * Read the messages with a valid timestamp from a channel folder, preferring
+ * messages.json over messages.csv. A channel with neither file has no messages.
+ */
+async function readChannelMessages(zip: JSZip, dir: string): Promise<ChannelMessagesResult> {
+  const sources = [
+    { file: 'messages.json', parse: messagesFromJson },
+    { file: 'messages.csv', parse: messagesFromCsv },
+  ] as const;
+  for (const { file, parse } of sources) {
+    const entry = zip.file(`${dir}/${file}`);
+    if (!entry) continue;
+    try {
+      return { ok: true, messages: parse(await entry.async('text')) };
+    } catch {
+      return { ok: false, file };
+    }
+  }
+  return { ok: true, messages: [] };
+}
+
 /** Find the actual casing of a top-level directory in the zip (e.g. "Messages" vs "messages"). */
 function detectDir(zip: JSZip, name: string): string | null {
   const lower = name.toLowerCase();
@@ -177,82 +247,34 @@ export async function parseDiscordExport(
 
         const chanId = String(chan.id ?? '').replace(/^c/, '');
 
-        const msgsJson = zip.file(`${msgPrefix}${ck}/messages.json`);
-        const msgsCsv = zip.file(`${msgPrefix}${ck}/messages.csv`);
-
-        // Collect per-user message data (this export only has the user's own messages)
-        const perUser: Map<string, { tsMax: number; count: number; lastId: string; lastContent: string }> = new Map();
-        for (const r of recipients) perUser.set(r.id, { tsMax: 0, count: 0, lastId: '', lastContent: '' });
-
-        // Also collect recent messages from this channel (shared across recipients)
-        const MAX_RECENT = 5;
-        const channelMsgs: Array<{ ts: number; content: string }> = [];
-
-        if (msgsJson) {
-          try {
-            const raw = await msgsJson.async('text');
-            const arr = JSON.parse(quoteSnowflakeIds(raw)) as Record<string, unknown>[];
-            if (Array.isArray(arr)) for (const msg of arr) {
-              const tsRaw = msg['Timestamp'] ?? msg['timestamp'] ?? msg['created_at'];
-              if (!tsRaw) continue;
-              const t = new Date(String(tsRaw)).getTime();
-              if (isNaN(t)) continue;
-              const msgId = String(msg['ID'] ?? msg['id'] ?? '');
-              const content = String(msg['Contents'] ?? msg['Content'] ?? msg['content'] ?? '');
-              channelMsgs.push({ ts: t, content });
-              for (const r of recipients) {
-                const d = perUser.get(r.id)!;
-                d.count++;
-                if (t > d.tsMax) { d.tsMax = t; d.lastId = msgId; d.lastContent = content; }
-              }
-            }
-          } catch { issues.push(`Bad messages.json in DM channel ${ck}`); }
-        } else if (msgsCsv) {
-          try {
-            const text = await msgsCsv.async('text');
-            const rows = parseCsvRows(text);
-            const header = rows[0] ?? [];
-            const tsIdx = header.findIndex(h => /timestamp/i.test(h));
-            const idIdx = header.findIndex(h => /^id$/i.test(h));
-            const contentIdx = header.findIndex(h => /contents|content|message/i.test(h));
-            if (tsIdx >= 0) {
-              for (const cols of rows.slice(1)) {
-                const tsRaw = cols[tsIdx];
-                if (!tsRaw) continue;
-                const t = new Date(tsRaw).getTime();
-                if (isNaN(t)) continue;
-                const msgId = idIdx >= 0 ? (cols[idIdx] || '') : '';
-                const content = contentIdx >= 0 ? (cols[contentIdx] || '') : '';
-                channelMsgs.push({ ts: t, content });
-                for (const r of recipients) {
-                  const d = perUser.get(r.id)!;
-                  d.count++;
-                  if (t > d.tsMax) { d.tsMax = t; d.lastId = msgId; d.lastContent = content; }
-                }
-              }
-            }
-          } catch { issues.push(`Bad messages.csv in DM channel ${ck}`); }
+        const read = await readChannelMessages(zip, `${msgPrefix}${ck}`);
+        if (!read.ok) {
+          issues.push(`Bad ${read.file} in DM channel ${ck}`);
+          continue;
         }
 
-        channelMsgs.sort((a, b) => b.ts - a.ts);
-        const recentChannelMsgs = channelMsgs.length > 0
-          ? channelMsgs.slice(0, MAX_RECENT) : undefined;
+        // This export only has the user's own messages, so every recipient
+        // shares the channel's count, latest message, and recent previews.
+        const MAX_RECENT = 5;
+        const newestFirst = [...read.messages].sort((a, b) => b.ts - a.ts);
+        const latest = newestFirst[0];
+        if (!latest) continue;
+        const recentMsgs = newestFirst.slice(0, MAX_RECENT).map(({ ts, content }) => ({ ts, content }));
 
         // Sync per-user data into userMap
-        for (const [rid, d] of perUser) {
-          if (d.count === 0) continue;
-          let u = userMap.get(rid);
+        for (const r of recipients) {
+          let u = userMap.get(r.id);
           if (!u) {
-            u = { id: rid, name: recipients.find(r => r.id === rid)?.name ?? rid, myLastMsg: null, myMsgCount: 0, lastMsgId: null, lastChannelId: null, lastMsgContent: null };
-            userMap.set(rid, u);
+            u = { id: r.id, name: r.name, myLastMsg: null, myMsgCount: 0, lastMsgId: null, lastChannelId: null, lastMsgContent: null };
+            userMap.set(r.id, u);
           }
-          u.myMsgCount += d.count;
-          if (d.tsMax > (u.myLastMsg ?? 0)) {
-            u.myLastMsg = d.tsMax;
-            u.lastMsgId = d.lastId || u.lastMsgId;
+          u.myMsgCount += read.messages.length;
+          if (latest.ts > (u.myLastMsg ?? 0)) {
+            u.myLastMsg = latest.ts;
+            u.lastMsgId = latest.id || u.lastMsgId;
             u.lastChannelId = chanId || u.lastChannelId;
-            u.lastMsgContent = d.lastContent || u.lastMsgContent;
-            if (recentChannelMsgs) u.recentMsgs = recentChannelMsgs;
+            u.lastMsgContent = latest.content || u.lastMsgContent;
+            u.recentMsgs = recentMsgs;
           }
         }
       } else {
@@ -279,43 +301,17 @@ export async function parseDiscordExport(
     }
     g.channelCount++;
 
-    const msgsJson = zip.file(`${msgPrefix}${ck}/messages.json`);
-    const msgsCsv = zip.file(`${msgPrefix}${ck}/messages.csv`);
-
-    const timestamps: string[] = [];
-    if (msgsJson) {
-      try {
-        const arr = JSON.parse(await msgsJson.async('text')) as Array<Record<string, string>>;
-        if (Array.isArray(arr)) {
-          for (const msg of arr) {
-            const t = msg['Timestamp'] || msg['timestamp'] || msg['created_at'];
-            if (t) timestamps.push(t);
-          }
-        }
-      } catch {
-        issues.push(`Bad messages.json in ${ck}`);
-      }
-    } else if (msgsCsv) {
-      try {
-        const text = await msgsCsv.async('text');
-        const rows = parseCsvRows(text);
-        for (const cols of rows.slice(1)) {
-          if (cols.length >= 2 && cols[1]) timestamps.push(cols[1]);
-        }
-      } catch {
-        issues.push(`Bad messages.csv in ${ck}`);
-      }
+    const read = await readChannelMessages(zip, `${msgPrefix}${ck}`);
+    if (!read.ok) {
+      issues.push(`Bad ${read.file} in ${ck}`);
+      continue;
     }
-
-    g.myMsgCount += timestamps.length;
-    for (const ts of timestamps) {
-      const t = new Date(ts).getTime();
-      if (isNaN(t)) continue;
-      if (g.myLastMsg === null || t > g.myLastMsg) g.myLastMsg = t;
-      if (g.myFirstMsg === null || t < g.myFirstMsg) g.myFirstMsg = t;
+    g.myMsgCount += read.messages.length;
+    for (const { ts } of read.messages) {
+      if (g.myLastMsg === null || ts > g.myLastMsg) g.myLastMsg = ts;
+      if (g.myFirstMsg === null || ts < g.myFirstMsg) g.myFirstMsg = ts;
     }
   }
-
 
   return {
     servers: Array.from(guildMap.values()),
