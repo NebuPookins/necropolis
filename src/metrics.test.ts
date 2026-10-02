@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSparkPotential } from './metrics';
+import { computeSparkPotential, localDateString } from './metrics';
 
 const MS_PER_DAY = 86400000;
 const NOW = 1_700_000_000_000;
@@ -26,5 +26,15 @@ describe('computeSparkPotential ranking', () => {
     const a = computeSparkPotential(user(810, 53), undefined, NOW);
     const b = computeSparkPotential(user(234, 61), undefined, NOW);
     expect(b.score).toBeGreaterThan(a.score);
+  });
+});
+
+describe('localDateString', () => {
+  it('uses the local calendar date late in the evening', () => {
+    expect(localDateString(new Date(2026, 9, 2, 23, 30).getTime())).toBe('2026-10-02');
+  });
+
+  it('uses the local calendar date early in the morning', () => {
+    expect(localDateString(new Date(2026, 0, 5, 0, 30).getTime())).toBe('2026-01-05');
   });
 });

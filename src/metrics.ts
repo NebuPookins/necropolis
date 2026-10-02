@@ -145,6 +145,17 @@ export function fmtDate(ms: number | null | undefined): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/**
+ * Format a timestamp as the user's local calendar date (YYYY-MM-DD), the
+ * value format of `<input type="date">`. Unlike `toISOString()`, this does not
+ * shift to UTC, so "today" is the user's today in every timezone.
+ */
+export function localDateString(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export function fmtAgo(ms: number | null | undefined, now: number): string {
   if (ms === null || ms === undefined) return 'never';
   const days = Math.floor((now - ms) / MS_PER_DAY);

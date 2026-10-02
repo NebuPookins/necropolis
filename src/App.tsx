@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } fr
 import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
-import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo } from './metrics';
+import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo, localDateString } from './metrics';
 import './styles.css';
 
 // =========================================================================
@@ -219,7 +219,7 @@ interface ExpandedPanelProps {
 function ExpandedPanel({ s, onUpdate }: ExpandedPanelProps) {
   const m = s.manual;
   const careLabels = ['leaving', 'meh', 'neutral', 'value', 'essential'];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateString(Date.now());
 
   return (
     <div style={{
@@ -446,7 +446,7 @@ interface UserExpandedPanelProps {
 function UserExpandedPanel({ u, onUpdate, now }: UserExpandedPanelProps) {
   const m = u.manual;
   const careLabels = ['leaving', 'meh', 'neutral', 'value', 'essential'];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateString(now);
   const myFmt = (ms: number | null) => ms ? fmtDate(ms) : '—';
   const channelLink = u.lastChannelId
     ? `https://discord.com/channels/@me/${u.lastChannelId}`
@@ -833,7 +833,7 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `discord-audit-${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `discord-audit-${localDateString(Date.now())}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
