@@ -151,6 +151,34 @@ async function readOwnUserId(zip: JSZip): Promise<string | null> {
   }
 }
 
+const DM_INDEX_PREFIX = 'Direct Message with ';
+
+/**
+ * Read 1:1 DM partner names from Messages/index.json, keyed by channel ID.
+ * Newer exports list DM recipients only as bare IDs in channel.json, so this
+ * index (e.g. "Direct Message with alice#0") is the only source of their
+ * names. The "#0" suffix Discord uses for migrated usernames is dropped.
+ */
+async function readDmNames(zip: JSZip, messagesDir: string): Promise<ReadonlyMap<string, string>> {
+  const indexFile = zip.file(`${messagesDir}/index.json`);
+  if (!indexFile) return new Map();
+  try {
+    const data: object = JSON.parse(await indexFile.async('text'));
+    return new Map(Object.entries(data).flatMap(([chanId, label]) => {
+      if (typeof label !== 'string' || !label.startsWith(DM_INDEX_PREFIX)) return [];
+      const name = label.slice(DM_INDEX_PREFIX.length).replace(/#0$/, '').trim();
+      return name && name !== 'Unknown Participant' ? [[chanId, name] as const] : [];
+    }));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Name shown for a DM contact whose export entry carries only an ID. */
+function placeholderUserName(id: string): string {
+  return `User ${id.slice(-4)}`;
+}
+
 export async function parseDiscordExport(
   file: File,
   onProgress?: (p: ProgressInfo) => void,
@@ -198,8 +226,9 @@ export async function parseDiscordExport(
     }
   }
 
-  const ownUserId = await readOwnUserId(zip);
-  const userMap = new Map<string, DiscordUser>();
+  const [ownUserId, dmNames] = await Promise.all([readOwnUserId(zip), readDmNames(zip, messagesDir)]);
+  // Names stay null until some channel or index entry supplies one.
+  const userMap = new Map<string, Omit<DiscordUser, 'name'> & { name: string | null }>();
 
   let channelsWithGuild = 0;
   let channelsSkippedNoGuild = 0;
@@ -236,16 +265,19 @@ export async function parseDiscordExport(
       const hasRecipients = Array.isArray(raw) && raw.length > 0;
 
       if (isDm && hasRecipients) {
-        const recipients: { id: string; name: string }[] = raw.map((r: unknown) => {
-          if (typeof r === 'string') {
-            const isId = /^\d+$/.test(r);
-            return { id: r, name: isId ? `User ${r.slice(-4)}` : r };
-          }
+        // A null name means the export only identifies the recipient by ID.
+        const recipients: { id: string; name: string | null }[] = raw.map((r: unknown) => {
+          if (typeof r === 'string') return { id: r, name: /^\d+$/.test(r) ? null : r };
           const o = r as Record<string, unknown>;
-          return { id: String(o.id ?? o.ID ?? ''), name: String(o.global_name ?? o.username ?? o.id ?? '').slice(0, 60) };
+          const name = o.global_name ?? o.username;
+          return { id: String(o.id ?? o.ID ?? ''), name: name ? String(name).slice(0, 60) : null };
         }).filter(r => r.id && r.id !== ownUserId);
 
         const chanId = String(chan.id ?? '').replace(/^c/, '');
+
+        // The index names a DM's partner, which is only unambiguous when a
+        // single recipient remains once the exporter is excluded.
+        const indexName = recipients.length === 1 ? dmNames.get(chanId) ?? null : null;
 
         const read = await readChannelMessages(zip, `${msgPrefix}${ck}`);
         if (!read.ok) {
@@ -263,10 +295,13 @@ export async function parseDiscordExport(
 
         // Sync per-user data into userMap
         for (const r of recipients) {
+          const name = r.name ?? indexName;
           let u = userMap.get(r.id);
           if (!u) {
-            u = { id: r.id, name: r.name, myLastMsg: null, myMsgCount: 0, lastMsgId: null, lastChannelId: null, lastMsgContent: null };
+            u = { id: r.id, name, myLastMsg: null, myMsgCount: 0, lastMsgId: null, lastChannelId: null, lastMsgContent: null };
             userMap.set(r.id, u);
+          } else {
+            u.name ??= name;
           }
           u.myMsgCount += read.messages.length;
           if (latest.ts > (u.myLastMsg ?? 0)) {
@@ -315,7 +350,7 @@ export async function parseDiscordExport(
 
   return {
     servers: Array.from(guildMap.values()),
-    users: Array.from(userMap.values()),
+    users: Array.from(userMap.values(), u => ({ ...u, name: u.name ?? placeholderUserName(u.id) })),
     issues,
     importedAt: Date.now(),
   };

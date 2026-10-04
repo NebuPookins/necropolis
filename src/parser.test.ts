@@ -118,3 +118,57 @@ describe('parseDiscordExport message timestamps', () => {
     expect(user.recentMsgs?.map(m => m.content)).toEqual(['new', 'old']);
   });
 });
+
+describe('parseDiscordExport DM contact names', () => {
+  const ME = '111111111111111111';
+  const ALICE = '222222222222222222';
+  const BOB = '333333333333333333';
+  const msgs = 'ID,Timestamp,Contents\n1,2024-01-01T00:00:00.000Z,hi\n';
+  const account = { 'account/user.json': `{"id":"${ME}"}` };
+
+  it('names an ID-only DM partner from the messages index', async () => {
+    const { users } = await parseZip({
+      ...account,
+      'messages/index.json': JSON.stringify({ '9': 'Direct Message with alice#0' }),
+      'messages/c9/channel.json': `{"id":"9","type":"DM","recipients":["${ME}","${ALICE}"]}`,
+      'messages/c9/messages.csv': msgs,
+    });
+
+    expect(users.map(u => [u.id, u.name])).toEqual([[ALICE, 'alice']]);
+  });
+
+  it('does not apply the index name to group DM members', async () => {
+    const { users } = await parseZip({
+      ...account,
+      'messages/index.json': JSON.stringify({ '9': 'Direct Message with alice#0' }),
+      'messages/c9/channel.json': `{"id":"9","type":"GROUP_DM","recipients":["${ME}","${ALICE}","${BOB}"]}`,
+      'messages/c9/messages.csv': msgs,
+    });
+
+    expect(users.map(u => u.name).sort()).toEqual(['User 2222', 'User 3333']);
+  });
+
+  it('upgrades a placeholder name once a named DM with the same contact is seen', async () => {
+    const { users } = await parseZip({
+      ...account,
+      'messages/index.json': JSON.stringify({ '8': null, '9': 'Direct Message with alice' }),
+      'messages/c8/channel.json': `{"id":"8","type":"GROUP_DM","recipients":["${ME}","${ALICE}","${BOB}"]}`,
+      'messages/c8/messages.csv': msgs,
+      'messages/c9/channel.json': `{"id":"9","type":"DM","recipients":["${ME}","${ALICE}"]}`,
+      'messages/c9/messages.csv': msgs,
+    });
+
+    expect(users.find(u => u.id === ALICE)?.name).toBe('alice');
+  });
+
+  it('falls back to a placeholder when the index has no usable name', async () => {
+    const { users } = await parseZip({
+      ...account,
+      'messages/index.json': JSON.stringify({ '9': 'Direct Message with Unknown Participant' }),
+      'messages/c9/channel.json': `{"id":"9","type":"DM","recipients":["${ME}","${ALICE}"]}`,
+      'messages/c9/messages.csv': msgs,
+    });
+
+    expect(users[0].name).toBe('User 2222');
+  });
+});
