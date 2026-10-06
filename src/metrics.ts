@@ -9,22 +9,35 @@ const NEVER_MESSAGED_DAYS = 365 * 5;
 /** Scale factor applied so spark potential lands in a readable 0-500ish range. */
 export const SPARK_SCALE_FACTOR = 50;
 
+/** The most recent known engagement with an entity, and where that date came from. */
+export interface LastActivity {
+  readonly at: number;
+  readonly source: 'manual' | 'export';
+}
+
 /**
- * Resolve the number of days since the user last engaged with this entity.
- * Uses the manual override date if set, otherwise falls back to the last message timestamp.
+ * Resolve when the user last engaged with this entity: the later of the manual
+ * activity date and the last message timestamp from the export. Taking the
+ * later one keeps a stale manual date from hiding newer messages that a fresh
+ * export brings in.
  */
+export function resolveLastActivity(
+  manualActivityAt: string | null | undefined,
+  myLastMsg: number | null,
+): LastActivity | null {
+  const manual = manualActivityAt ? Date.parse(manualActivityAt) : NaN;
+  if (!isNaN(manual) && (myLastMsg === null || manual >= myLastMsg)) return { at: manual, source: 'manual' };
+  return myLastMsg === null ? null : { at: myLastMsg, source: 'export' };
+}
+
+/** Days since the user last engaged with this entity (see {@link resolveLastActivity}). */
 function resolveDaysSinceActivity(
   manualActivityAt: string | null | undefined,
   myLastMsg: number | null,
   now: number,
 ): number {
-  let refMs: number | null = null;
-  if (manualActivityAt) {
-    const t = new Date(manualActivityAt).getTime();
-    if (!isNaN(t)) refMs = t;
-  }
-  if (refMs === null) refMs = myLastMsg;
-  return refMs === null ? NEVER_MESSAGED_DAYS : Math.max(0, (now - refMs) / MS_PER_DAY);
+  const last = resolveLastActivity(manualActivityAt, myLastMsg);
+  return last === null ? NEVER_MESSAGED_DAYS : Math.max(0, (now - last.at) / MS_PER_DAY);
 }
 
 export function computeDeadness(server: Server, manual: ManualEntry | undefined, now: number): number {

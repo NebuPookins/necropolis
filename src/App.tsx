@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } fr
 import type { DiscordUser, EnrichedDiscordUser, EnrichedServer, ManualEntry, ManualMap, ProgressInfo, Server } from './types';
 import { Store } from './store';
 import { parseDiscordExport } from './parser';
-import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo, localDateString } from './metrics';
+import { computeDeadness, computeSparkPotential, deadnessTier, sparkTier, fmtDate, fmtAgo, localDateString, resolveLastActivity } from './metrics';
 import './styles.css';
 
 // =========================================================================
@@ -123,9 +123,7 @@ interface ServerRowProps {
 function ServerRow({ s, expanded, onExpand, onUpdate, now }: ServerRowProps) {
   const tier = deadnessTier(s.deadness);
   const decision = s.manual.decision || 'undecided';
-  const refDate = s.manual.manualActivityAt
-    ? new Date(s.manual.manualActivityAt).getTime()
-    : s.myLastMsg;
+  const lastActivity = resolveLastActivity(s.manual.manualActivityAt, s.myLastMsg);
 
   return (
     <div className="row-border" style={{ background: expanded ? 'var(--bg-1)' : 'transparent' }}>
@@ -149,9 +147,9 @@ function ServerRow({ s, expanded, onExpand, onUpdate, now }: ServerRowProps) {
           </div>
         </div>
         <div style={{ color: 'var(--mid)', fontSize: 11 }} className="col-hide">
-          <div style={{ color: 'var(--fg)' }}>{fmtDate(refDate)}</div>
+          <div style={{ color: 'var(--fg)' }}>{fmtDate(lastActivity?.at)}</div>
           <div style={{ fontSize: 10, color: 'var(--dim)' }}>
-            {fmtAgo(refDate, now)} ago{s.manual.manualActivityAt ? ' (manual)' : ''}
+            {fmtAgo(lastActivity?.at, now)} ago{lastActivity?.source === 'manual' ? ' (manual)' : ''}
           </div>
         </div>
         <div style={{ color: 'var(--fg)', fontSize: 12 }} className="col-hide">{s.myMsgCount}</div>
@@ -279,7 +277,7 @@ function ExpandedPanel({ s, onUpdate }: ExpandedPanelProps) {
         </div>
         <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 6, lineHeight: 1.5 }}>
           set this to the date of the most recent message you saw in the server when you opened it.
-          overrides "my last msg" for the deadness calculation.
+          the later of this and "my last msg" is used for the deadness calculation.
         </div>
 
         <SectionTitle style={{ marginTop: 20 }}>notes</SectionTitle>
@@ -377,9 +375,7 @@ interface UserRowProps {
 function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
   const tier = sparkTier(u.sparkPotential.score);
   const decision = u.manual.decision || 'undecided';
-  const refDate = u.manual.manualActivityAt
-    ? new Date(u.manual.manualActivityAt).getTime()
-    : u.myLastMsg;
+  const lastActivity = resolveLastActivity(u.manual.manualActivityAt, u.myLastMsg);
 
   return (
     <div className="row-border">
@@ -403,9 +399,9 @@ function UserRow({ u, onClick, onUpdate, now }: UserRowProps) {
           </div>
         </div>
         <div style={{ color: 'var(--mid)', fontSize: 11 }} className="col-hide">
-          <div style={{ color: 'var(--fg)' }}>{fmtDate(refDate)}</div>
+          <div style={{ color: 'var(--fg)' }}>{fmtDate(lastActivity?.at)}</div>
           <div style={{ fontSize: 10, color: 'var(--dim)' }}>
-            {fmtAgo(refDate, now)} ago
+            {fmtAgo(lastActivity?.at, now)} ago
           </div>
         </div>
         <div style={{ color: 'var(--fg)', fontSize: 12 }} className="col-hide">{u.myMsgCount}</div>
